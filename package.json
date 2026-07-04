@@ -1,0 +1,36 @@
+{
+  "name": "monde",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "monde": "packages/cli/dist/index.js",
+    "monde-service": "packages/service/dist/index.js"
+  },
+  "packageManager": "npm@11.14.1",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @monde/core && npm run build -w @monde/adapters && npm run build -w @monde/service && npm run build -w @monde/cli && npm run build -w @monde/web",
+    "check": "npm run build -w @monde/core && npm run build -w @monde/adapters && npm run check --workspaces --if-present",
+    "dev": "npm run dev:all",
+    "dev:service": "npm run build -w @monde/core && npm run dev -w @monde/service",
+    "dev:web": "npm run dev -w @monde/web",
+    "dev:all": "npm run dev:service & npm run dev:web",
+    "monde": "npm run build -w @monde/core && npm run dev -w @monde/cli --",
+    "smoke:all": "npm run smoke:vertical-slice-1 && npm run smoke:local-alpha && npm run smoke:harness-alpha && npm run smoke:harness-beta && npm run smoke:write-evidence && npm run smoke:codex-write && npm run smoke:beta-review",
+    "smoke:vertical-slice-1": "bash scripts/smoke-vertical-slice-1.sh",
+    "smoke:local-alpha": "bash scripts/smoke-local-alpha.sh",
+    "smoke:harness-alpha": "bash scripts/smoke-harness-alpha.sh",
+    "smoke:harness-beta": "bash scripts/smoke-harness-beta.sh",
+    "smoke:write-evidence": "bash scripts/smoke-write-evidence.sh",
+    "smoke:codex-write": "bash scripts/smoke-codex-write.sh",
+    "smoke:beta-review": "bash scripts/smoke-beta-review.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}
