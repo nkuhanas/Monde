@@ -78,7 +78,7 @@ for (const input of planInputs) {
   console.log(`${plan.id}\t${input.title}`);
 }
 
-const docs = ["runtime.md", "harnesses.md", "harness-liveness.md", "run-model.md", "mcp.md", "operator-console.md", "review-flow.md", "write-runs.md", "plans.md"];
+const docs = ["development.md", "runtime.md", "harnesses.md", "harness-liveness.md", "run-model.md", "mcp.md", "operator-console.md", "review-flow.md", "write-runs.md", "plans.md"];
 for (const doc of docs) {
   if (!fs.existsSync(join(root, ".monde", "docs", doc))) throw new Error(`Missing doc ${doc}`);
 }

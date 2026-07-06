@@ -3,19 +3,31 @@
 Monde is a local operator runtime centered on runs. A run captures intent,
 provenance, execution state, logs, artifacts, and result/review data.
 
+Filesystem identity is portable through `.monde/` and `*.mon` directories.
+Operational state is local and service-owned in SQLite.
+
+## Workspace Packages
+
+```text
+packages/core      Shared schemas, IDs, paths, DTOs, and run state helpers
+packages/service   Local Fastify service, HTTP API, MCP endpoint, SQLite, run manager
+packages/cli       `monde` command-line interface
+packages/web       React/Vite operator console
+packages/adapters  Harness adapter definitions for basic-process, Codex, opencode
+```
+
 ## Backend Choices
 
 Current MVP stack:
 
 ```text
-TypeScript + Node.js
-Fastify HTTP APIs
-Fastify CORS and websocket support
-Node built-in `node:sqlite`
-React/Vite web UI
-xterm.js terminal rendering
-commander CLI
-HTTP MCP endpoint plus stdio bridge
+Runtime/service:   TypeScript + Node.js
+HTTP/API:          Fastify, CORS, websocket dependency
+MCP:               loopback HTTP JSON-RPC plus `monde mcp bridge`
+Database:          Node built-in `node:sqlite` with local migrations
+Frontend:          React + Vite + xterm.js
+CLI:               TypeScript + commander
+Auth:              local service token plus run-scoped MCP tokens
 ```
 
 The runtime favors shared TypeScript DTOs across service, CLI, MCP, and web UI.
@@ -31,13 +43,19 @@ web/API: http://127.0.0.1:3761
 MCP:     http://127.0.0.1:3762/mcp
 ```
 
+The Vite web UI defaults to:
+
+```text
+http://127.0.0.1:5175
+```
+
 Environment:
 
 ```text
-MONDE_HOST
-MONDE_WEB_PORT
-MONDE_MCP_PORT
-MONDE_UI_PORT
+MONDE_HOST       default 127.0.0.1
+MONDE_WEB_PORT   default 3761
+MONDE_MCP_PORT   default 3762
+MONDE_UI_PORT    default 5175
 MONDE_ALLOW_BROWSER_MCP
 MONDE_STALE_SCOPE_INTERVAL_MS
 MONDE_HITL_IDLE_TIMEOUT_MS
