@@ -140,7 +140,7 @@ export function finishRunFromExit(
     process_status: "exited",
     outcome: exit.code === 0 ? "unknown" : "failed",
     runtime_state: exit.code === 0 ? "closed" : "failed",
-    outcome_state: exit.code === 0 ? "succeeded" : "failed",
+    outcome_state: exit.code === 0 ? "unknown" : "failed",
     close_reason: "process_exited",
     ended_at: now,
     closed_at: now,

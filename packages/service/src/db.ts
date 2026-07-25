@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 
-export const schemaVersion = 4;
+export const schemaVersion = 5;
 
 export interface MondeDatabase {
   db: DatabaseSync;
@@ -239,6 +239,16 @@ function migrate(db: DatabaseSync): void {
              ELSE NULL
            END
          WHERE interaction_mode = 'one_shot';
+      `);
+    }
+
+    if (current >= 4 && current < 5) {
+      db.exec(`
+        UPDATE runs
+           SET outcome_state = 'unknown'
+         WHERE interaction_mode = 'one_shot'
+           AND outcome = 'unknown'
+           AND outcome_state = 'succeeded';
       `);
     }
 

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { getMondePlatformPaths } from "@monde/core";
+import { backup as sqliteBackup, DatabaseSync } from "node:sqlite";
+import { getMondePlatformPaths, type BackupMetadataDto } from "@monde/core";
 
 export function backupInfo(): void {
   const paths = getMondePlatformPaths();
@@ -11,32 +11,48 @@ export function backupInfo(): void {
   console.log(`Backup directory: ${backupDir(paths.dataDir)}`);
   console.log(`Latest backup: ${latest ?? "none"}`);
   console.log("Operational continuity depends on the SQLite DB.");
-  console.log(`Suggested local copy: cp ${shellQuote(paths.dbPath)} ${shellQuote(`${paths.dbPath}.backup`)}`);
+  console.log("Use `monde backup create` for a transactionally consistent online backup.");
   console.log("Full export/import or backup/restore is a post-MVP recovery path.");
 }
 
-export function backupCreate(): void {
+export async function backupCreate(): Promise<void> {
   const paths = getMondePlatformPaths();
-  if (!fs.existsSync(paths.dbPath)) {
-    throw new Error(`SQLite DB not found at ${paths.dbPath}`);
+  const metadata = await createBackup(paths.dbPath, paths.dataDir);
+  console.log(metadata.backup_path);
+}
+
+export async function createBackup(dbPath: string, dataDir: string): Promise<BackupMetadataDto> {
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`SQLite DB not found at ${dbPath}`);
   }
 
-  const dir = backupDir(paths.dataDir);
+  const dir = backupDir(dataDir);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stamp = new Date().toISOString().replaceAll(":", "").replaceAll(".", "");
   const destination = path.join(dir, `monde-${stamp}.sqlite`);
-  fs.copyFileSync(paths.dbPath, destination);
+  const source = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    await sqliteBackup(source, destination);
+  } catch (error) {
+    if (fs.existsSync(destination)) {
+      fs.unlinkSync(destination);
+    }
+    throw error;
+  } finally {
+    source.close();
+  }
+
   fs.chmodSync(destination, 0o600);
   const stat = fs.statSync(destination);
-  const metadata = {
+  const metadata: BackupMetadataDto = {
     created_at: new Date().toISOString(),
-    db_path: paths.dbPath,
+    db_path: dbPath,
     backup_path: destination,
-    schema_version: readSchemaVersion(paths.dbPath),
+    schema_version: readSchemaVersion(destination),
     size: stat.size
   };
   fs.writeFileSync(`${destination}.json`, `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
-  console.log(destination);
+  return metadata;
 }
 
 export function backupList(): void {
@@ -65,10 +81,6 @@ function backupDir(dataDir: string): string {
 
 function latestBackupPath(dataDir: string): string | undefined {
   return listBackups(dataDir).at(-1)?.backup_path;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function listBackups(dataDir: string): Array<Record<string, unknown> & { backup_path: string }> {

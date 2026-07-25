@@ -144,7 +144,7 @@ mcp
 
 const backup = program.command("backup").description("Inspect local continuity and backup paths");
 backup.command("info").action(backupInfo);
-backup.command("create").description("copy the operational SQLite DB into the local backup directory").action(backupCreate);
+backup.command("create").description("create a consistent online backup of the operational SQLite DB").action(backupCreate);
 backup.command("list").description("list local SQLite backups").action(backupList);
 
 program.command("doctor").description("Inspect local Monde health and continuity risks").action(doctor);
