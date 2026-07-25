@@ -128,6 +128,7 @@ export class RunManager {
       runner_type: runnerType,
       pid: null,
       run_token_hash: hashRunToken(runToken),
+      run_token_revoked_at: null,
       service_addr: this.deps.config.serviceAddr,
       mcp_addr: this.deps.config.mcpAddr,
       started_by: "monde-service",
@@ -259,6 +260,7 @@ export class RunManager {
       runner_type: runnerType,
       pid: null,
       run_token_hash: hashRunToken(runToken),
+      run_token_revoked_at: null,
       service_addr: this.deps.config.serviceAddr,
       mcp_addr: this.deps.config.mcpAddr,
       started_by: "monde-service",
@@ -389,6 +391,7 @@ export class RunManager {
         }
         settled = true;
         this.clearHitlActivity(input.runId);
+        this.revokeRunToken(input.runId);
         if (kind === "resolve") {
           resolve(value as { stdout: string; stderr: string; exit: { code: number | null; signal: NodeJS.Signals | null } });
         } else {
@@ -506,6 +509,7 @@ export class RunManager {
     }
 
     this.finalizeWriteEvidence(runId);
+    this.revokeRunToken(runId);
     this.deps.events.publish(runId, "run_finished", {
       run_id: runId,
       status: "finished",
@@ -533,6 +537,7 @@ export class RunManager {
   cancelRun(runId: string): RunRecord {
     const run = this.requireRun(runId);
     this.deps.runs.updateLifecycle(runId, cancelQueuedRun(run));
+    this.revokeRunToken(runId);
     this.deps.events.publish(runId, "run_finished", {
       run_id: runId,
       status: "finished",
@@ -545,6 +550,16 @@ export class RunManager {
 
   isRunTokenAuthorized(runId: string, token: string): boolean {
     const run = this.deps.runs.get(runId);
+    if (!run || (run.status !== "starting" && run.status !== "active")) {
+      return false;
+    }
+    if (run.interaction_mode === "hitl_thread") {
+      const activity = this.hitlActivities.get(runId);
+      if (!activity || activity.timedOut) {
+        return false;
+      }
+    }
+
     const tokenHash = typeof run?.execution.run_token_hash === "string" ? run.execution.run_token_hash : undefined;
     return !!tokenHash && verifyRunToken(token, tokenHash);
   }
@@ -684,6 +699,7 @@ export class RunManager {
       }
       this.deps.runs.updateLifecycle(run.id, finishRunInterrupted(run, "lost"));
       this.finalizeWriteEvidence(run.id);
+      this.revokeRunToken(run.id);
       this.deps.events.publish(run.id, "run_finished", {
         run_id: run.id,
         status: "finished",
@@ -709,6 +725,7 @@ export class RunManager {
     this.deps.runs.updateLifecycle(runId, patch);
     const finished = this.requireRun(runId);
     this.finalizeWriteEvidence(runId);
+    this.revokeRunToken(runId);
     this.deps.events.publish(runId, "run_process_exit", {
       run_id: runId,
       code: exit.code,
@@ -737,6 +754,7 @@ export class RunManager {
     this.deps.runs.updateLifecycle(runId, finishRunInterrupted(current, "crashed"));
     const finished = this.requireRun(runId);
     this.finalizeWriteEvidence(runId);
+    this.revokeRunToken(runId);
     this.deps.events.publish(runId, "run_error_output", {
       run_id: runId,
       stream: "stderr",
@@ -924,6 +942,19 @@ export class RunManager {
 
     this.deps.runs.updateLifecycle(runId, addRunWarning(run, warning));
     this.deps.events.publish(runId, "warning_added", { run_id: runId, warning });
+  }
+
+  private revokeRunToken(runId: string): void {
+    const run = this.deps.runs.get(runId);
+    if (!run || typeof run.execution.run_token_hash !== "string") {
+      return;
+    }
+
+    const { run_token_hash: _revokedTokenHash, ...execution } = run.execution;
+    this.deps.runs.updateExecution(runId, {
+      ...execution,
+      run_token_revoked_at: new Date().toISOString()
+    });
   }
 
   private requireRun(runId: string): RunRecord {

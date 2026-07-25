@@ -55,8 +55,7 @@ export class BasicProcessRunner implements HarnessRunner {
     const stdoutFilter = command.outputMode === "codex-json-filtered" ? new CodexJsonOutputFilter() : undefined;
     const child = spawn(command.command, command.args, {
       cwd: command.cwd,
-      env: {
-        ...process.env,
+      env: buildHarnessEnvironment({
         ...command.env,
         MONDE_RUN_ID: input.runId,
         MONDE_RUN_TOKEN: input.runToken,
@@ -71,7 +70,7 @@ export class BasicProcessRunner implements HarnessRunner {
         TERM: process.env.TERM || "xterm-256color",
         COLUMNS: process.env.COLUMNS || "120",
         LINES: process.env.LINES || "32"
-      },
+      }),
       stdio: "pipe"
     });
 
@@ -102,6 +101,40 @@ export class BasicProcessRunner implements HarnessRunner {
 
     return new ChildRunningProcess(input.runId, child, runnerType, command.stdinMode !== "closed");
   }
+}
+
+const inheritedHarnessEnvironmentKeys = [
+  "PATH",
+  "HOME",
+  "USER",
+  "LOGNAME",
+  "SHELL",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "COLORTERM",
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "XDG_CONFIG_HOME",
+  "XDG_CACHE_HOME"
+] as const;
+
+export function buildHarnessEnvironment(
+  explicit: Record<string, string>,
+  parent: NodeJS.ProcessEnv = process.env
+): Record<string, string> {
+  const environment: Record<string, string> = {};
+  for (const key of inheritedHarnessEnvironmentKeys) {
+    const value = parent[key];
+    if (value !== undefined) {
+      environment[key] = value;
+    }
+  }
+
+  return { ...environment, ...explicit };
 }
 
 class ChildRunningProcess implements RunningProcess {
