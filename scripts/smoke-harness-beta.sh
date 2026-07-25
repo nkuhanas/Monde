@@ -6,22 +6,17 @@ TMP_ROOT="${TMPDIR:-/tmp}/monde-harness-beta-smoke"
 WEB_PORT="${MONDE_WEB_PORT:-4021}"
 MCP_PORT="${MONDE_MCP_PORT:-4022}"
 
-if [[ "${MONDE_HARNESS_BETA_SKIP_EXISTING:-0}" != "1" ]]; then
-  echo "== existing smoke coverage =="
-  npm run smoke:vertical-slice-1 --prefix "$ROOT"
-  npm run smoke:local-alpha --prefix "$ROOT"
-  MONDE_HARNESS_ALPHA_SKIP_EXISTING=1 npm run smoke:harness-alpha --prefix "$ROOT"
-fi
-
 rm -rf "$TMP_ROOT"
 mkdir -p "$TMP_ROOT/apps/web"
 
-npm run build --prefix "$ROOT" >/dev/null
+if [[ "${MONDE_SMOKE_SKIP_BUILD:-0}" != "1" ]]; then
+  npm run build --prefix "$ROOT" >/dev/null
+fi
 
 echo "== runtime prompt and attention logic =="
 node --import tsx <<'NODE'
 import { buildRuntimePrompt } from "./packages/core/dist/index.js";
-import { deriveAttentionRuns } from "./packages/web/src/attention.ts";
+import { compareRunsForNavigator, runRequiresAttention } from "./packages/web/src/features/runs/runViewModel.ts";
 
 const prompt = buildRuntimePrompt(
   {
@@ -44,15 +39,15 @@ if (!prompt.includes("call runtime_scope() for current status")) {
   throw new Error(prompt);
 }
 
-const items = deriveAttentionRuns([
+const items = [
   { id: "finished", status: "finished", origin: { type: "operator" }, warnings: [], created_at: "2026-01-01T00:00:00Z" },
   { id: "queued-cron", status: "queued", origin: { type: "cron" }, warnings: [], created_at: "2026-01-01T00:00:01Z" },
   { id: "queued-plan", status: "queued", origin: { type: "plan" }, warnings: [], created_at: "2026-01-01T00:00:02Z" },
   { id: "blocked", status: "blocked", origin: { type: "operator" }, warnings: [], created_at: "2026-01-01T00:00:03Z" },
   { id: "warning", status: "finished", origin: { type: "operator" }, warnings: ["stale_scope"], created_at: "2026-01-01T00:00:04Z" },
   { id: "active", status: "active", origin: { type: "operator" }, warnings: [], created_at: "2026-01-01T00:00:05Z" }
-]);
-const order = items.map((item) => item.run.id).join(",");
+].filter(runRequiresAttention).sort(compareRunsForNavigator);
+const order = items.map((item) => item.id).join(",");
 if (order !== "active,warning,blocked,queued-plan,queued-cron") {
   throw new Error(order);
 }
@@ -216,7 +211,7 @@ grep -q "opencode" "$TMP_ROOT/adapters.txt"
 node "$ROOT/packages/cli/dist/index.js" adapter inspect codex >"$TMP_ROOT/codex-inspect.json" || true
 node "$ROOT/packages/cli/dist/index.js" adapter inspect opencode >"$TMP_ROOT/opencode-inspect.json" || true
 
-if command -v codex >/dev/null 2>&1; then
+if [[ "${MONDE_ENABLE_EXTERNAL_CODEX_SMOKE:-0}" == "1" ]] && command -v codex >/dev/null 2>&1; then
   echo "Codex installed; attempting bounded real adapter launch."
   (
     cd "$TMP_ROOT"
@@ -241,8 +236,10 @@ if (run.execution.runner !== "codex" || run.execution.runner_type !== "codex" ||
       node "$ROOT/packages/cli/dist/index.js" run close "$CODEX_RUN_ID" --outcome stopped >/dev/null || true
     fi
   fi
-else
+elif [[ "${MONDE_ENABLE_EXTERNAL_CODEX_SMOKE:-0}" == "1" ]]; then
   echo "Codex missing; adapter reports missing honestly."
+else
+  echo "External Codex smoke disabled; use npm run smoke:external to opt in."
 fi
 
 if command -v opencode >/dev/null 2>&1; then

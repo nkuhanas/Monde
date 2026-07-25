@@ -11,7 +11,9 @@ MCP_PORT="${MONDE_MCP_PORT:-4062}"
 rm -rf "$TMP_ROOT" "$OTHER_ROOT" "$STATE_ROOT"
 mkdir -p "$TMP_ROOT/apps/web" "$OTHER_ROOT/area" "$STATE_ROOT"
 
-npm run build --prefix "$ROOT" >/dev/null
+if [[ "${MONDE_SMOKE_SKIP_BUILD:-0}" != "1" ]]; then
+  npm run build --prefix "$ROOT" >/dev/null
+fi
 
 node "$ROOT/packages/cli/dist/index.js" init "$TMP_ROOT" --name "Beta Review Smoke"
 mkdir -p "$TMP_ROOT/.monde/docs"
@@ -61,9 +63,16 @@ node -e '
 const fs = require("node:fs");
 const pkg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
 const all = pkg.scripts["smoke:all"] || "";
-for (const name of ["smoke:vertical-slice-1","smoke:local-alpha","smoke:harness-alpha","smoke:harness-beta","smoke:write-evidence","smoke:codex-write","smoke:beta-review"]) {
-  if (!pkg.scripts[name] && name === "smoke:beta-review") throw new Error(`missing ${name}`);
-  if (!all.includes(name)) throw new Error(`smoke:all does not call ${name}`);
+const ci = pkg.scripts["smoke:ci"] || "";
+const external = pkg.scripts["smoke:external"] || "";
+if (!all.includes("npm run test") || !all.includes("npm run smoke:ci")) {
+  throw new Error("smoke:all must run focused tests and deterministic CI smokes");
+}
+for (const name of ["smoke:vertical-slice-1","smoke:local-alpha","smoke:harness-alpha","smoke:harness-beta","smoke:write-evidence","smoke:beta-review"]) {
+  if (!pkg.scripts[name] || !ci.includes(name)) throw new Error(`smoke:ci does not call ${name}`);
+}
+if (ci.includes("smoke:codex-write") || !external.includes("smoke-codex-write.sh")) {
+  throw new Error("external Codex smoke must remain outside smoke:ci");
 }
 ' "$ROOT/package.json"
 node "$ROOT/packages/cli/dist/index.js" --help | grep -q "Local Monde operator CLI"
@@ -237,8 +246,14 @@ NODE
 echo "== MCP direct and Content-Length bridge regressions =="
 (
   cd "$TMP_ROOT"
-  node "$ROOT/packages/cli/dist/index.js" message frontend.mon "node -e \"require('node:fs').writeFileSync(process.env.MONDE_WORK_ROOT + '/run-token.txt', process.env.MONDE_RUN_TOKEN); console.log('token captured')\""
-) >"$STATE_ROOT/token-run.txt"
+  node "$ROOT/packages/cli/dist/index.js" message frontend.mon "node -e \"require('node:fs').writeFileSync(process.env.MONDE_WORK_ROOT + '/run-token.txt', process.env.MONDE_RUN_TOKEN); console.log('token captured'); process.stdin.resume(); process.stdin.on('data', () => process.exit(0)); setTimeout(() => process.exit(1), 30000)\""
+) >"$STATE_ROOT/token-run.txt" &
+TOKEN_MESSAGE_PID=$!
+for _ in $(seq 1 50); do
+  [[ -s "$TMP_ROOT/apps/web/run-token.txt" ]] && break
+  sleep 0.1
+done
+test -s "$TMP_ROOT/apps/web/run-token.txt"
 TOKEN_RUN_ID="$(cd "$TMP_ROOT" && node "$ROOT/packages/cli/dist/index.js" run list --origin operator | awk 'NR == 1 { print $1 }')"
 RUN_TOKEN="$(cat "$TMP_ROOT/apps/web/run-token.txt")"
 node --input-type=module - "$MCP_ADDR" "$TOKEN_RUN_ID" "$RUN_TOKEN" "$OTHER_ROOT" <<'NODE'
@@ -298,6 +313,22 @@ const response = await fetch(mcpAddr, {
 const json = await response.json();
 const runs = json.result.structuredContent.runs;
 if (runs.some((run) => run.monde_id === otherId || run.id === otherRunId)) throw new Error(JSON.stringify(runs));
+NODE
+
+(
+  cd "$TMP_ROOT"
+  node "$ROOT/packages/cli/dist/index.js" run input "$TOKEN_RUN_ID" done
+) >"$STATE_ROOT/token-run-finish.txt"
+wait "$TOKEN_MESSAGE_PID"
+node --input-type=module - "$MCP_ADDR" "$TOKEN_RUN_ID" "$RUN_TOKEN" <<'NODE'
+const [mcpAddr, runId, runToken] = process.argv.slice(2);
+const response = await fetch(mcpAddr, {
+  method: "POST",
+  headers: { "content-type": "application/json", "x-monde-run-id": runId, "x-monde-run-token": runToken },
+  body: JSON.stringify({ jsonrpc: "2.0", id: "expired-auth", method: "tools/list", params: {} })
+});
+const json = await response.json();
+if (json.error?.code !== -32001) throw new Error(JSON.stringify(json));
 NODE
 
 echo "== adapter inspect, backup, and doctor =="

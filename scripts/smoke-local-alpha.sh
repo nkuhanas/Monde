@@ -9,7 +9,9 @@ MCP_PORT="${MONDE_MCP_PORT:-3992}"
 rm -rf "$TMP_ROOT"
 mkdir -p "$TMP_ROOT/apps/web"
 
-npm run build --prefix "$ROOT" >/dev/null
+if [[ "${MONDE_SMOKE_SKIP_BUILD:-0}" != "1" ]]; then
+  npm run build --prefix "$ROOT" >/dev/null
+fi
 
 node "$ROOT/packages/cli/dist/index.js" init "$TMP_ROOT" --name "Local Alpha Smoke"
 cat >"$TMP_ROOT/.monde/docs/test.md" <<'DOC'

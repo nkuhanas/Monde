@@ -8,6 +8,9 @@
     "monde-service": "packages/service/dist/index.js"
   },
   "packageManager": "npm@11.14.1",
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "workspaces": [
     "packages/*"
   ],
@@ -19,7 +22,10 @@
     "dev:web": "npm run dev -w @monde/web",
     "dev:all": "npm run dev:service & npm run dev:web",
     "monde": "npm run build -w @monde/core && npm run dev -w @monde/cli --",
-    "smoke:all": "npm run smoke:vertical-slice-1 && npm run smoke:local-alpha && npm run smoke:harness-alpha && npm run smoke:harness-beta && npm run smoke:write-evidence && npm run smoke:codex-write && npm run smoke:beta-review",
+    "test": "node --conditions development --import tsx --test tests/*.test.ts",
+    "smoke:all": "npm run test && npm run smoke:ci",
+    "smoke:ci": "npm run build && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:vertical-slice-1 && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:local-alpha && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:harness-alpha && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:harness-beta && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:write-evidence && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:beta-review",
+    "smoke:external": "npm run build && MONDE_SMOKE_SKIP_BUILD=1 MONDE_ENABLE_EXTERNAL_CODEX_SMOKE=1 bash scripts/smoke-harness-beta.sh && MONDE_SMOKE_SKIP_BUILD=1 bash scripts/smoke-codex-write.sh",
     "smoke:vertical-slice-1": "bash scripts/smoke-vertical-slice-1.sh",
     "smoke:local-alpha": "bash scripts/smoke-local-alpha.sh",
     "smoke:harness-alpha": "bash scripts/smoke-harness-alpha.sh",
@@ -32,8 +38,5 @@
     "@types/node": "^22.15.29",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"
-  },
-  "engines": {
-    "node": ">=22.16.0"
   }
 }

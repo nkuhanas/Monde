@@ -6,16 +6,12 @@ TMP_ROOT="${TMPDIR:-/tmp}/monde-harness-alpha-smoke"
 WEB_PORT="${MONDE_WEB_PORT:-4011}"
 MCP_PORT="${MONDE_MCP_PORT:-4012}"
 
-if [[ "${MONDE_HARNESS_ALPHA_SKIP_EXISTING:-0}" != "1" ]]; then
-  echo "== existing smoke coverage =="
-  npm run smoke:vertical-slice-1 --prefix "$ROOT"
-  npm run smoke:local-alpha --prefix "$ROOT"
-fi
-
 rm -rf "$TMP_ROOT"
 mkdir -p "$TMP_ROOT/apps/web"
 
-npm run build --prefix "$ROOT" >/dev/null
+if [[ "${MONDE_SMOKE_SKIP_BUILD:-0}" != "1" ]]; then
+  npm run build --prefix "$ROOT" >/dev/null
+fi
 
 node "$ROOT/packages/cli/dist/index.js" init "$TMP_ROOT" --name "Harness Alpha Smoke"
 cat >"$TMP_ROOT/.monde/docs/runtime.md" <<'DOC'

@@ -15,7 +15,9 @@ fi
 rm -rf "$TMP_ROOT" "$STATE_ROOT"
 mkdir -p "$TMP_ROOT/apps/web"
 
-npm run build --prefix "$ROOT" >/dev/null
+if [[ "${MONDE_SMOKE_SKIP_BUILD:-0}" != "1" ]]; then
+  npm run build --prefix "$ROOT" >/dev/null
+fi
 
 git init "$TMP_ROOT" >/dev/null
 git -C "$TMP_ROOT" config user.email "smoke@monde.local"
