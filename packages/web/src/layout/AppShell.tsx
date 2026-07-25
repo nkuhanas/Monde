@@ -35,8 +35,14 @@ export function AppShell({ activeTab, onSelectTab, machines, collapsedMachines, 
   floatingLayer?: ReactNode;
   children: ReactNode;
 }) {
+  const shellClassName = [
+    "app-shell",
+    activeTab === "overview" ? "app-shell-overview" : "",
+    activeTab === "runs" ? "app-shell-runs" : ""
+  ].filter(Boolean).join(" ");
+
   return (
-    <main className={activeTab === "overview" ? "app-shell app-shell-overview" : "app-shell"}>
+    <main className={shellClassName}>
       <aside className="resource-tree" aria-label="Monde browser">
         <div className="brand-block"><div className="brand-mark"><img src={BRAND_ICON_LOGO} alt="" /></div><div><h1>Monde</h1><p>Local operator console</p></div></div>
         <div className="tree-section">
@@ -72,10 +78,23 @@ export function AppShell({ activeTab, onSelectTab, machines, collapsedMachines, 
         {error ? <div className="warning-band">{error}</div> : null}
         {!token ? <div className="warning-band">Enter the local service token to load Monde state.</div> : null}
         <nav className="tabbar" aria-label="Monde sections">{appTabs.map((tab) => <button className={tab === activeTab ? "tab-button tab-button-active" : "tab-button"} type="button" key={tab} onClick={() => onSelectTab(tab)}>{tabLabel(tab)}</button>)}</nav>
-        <section className="status-strip" aria-label="Workspace summary">
-          <Metric label="Mons" value={metrics.mons} tone="blue" /><Metric label="Active" value={metrics.active} tone="green" /><Metric label="Queued" value={metrics.queued} tone="amber" /><Metric label="Finished" value={metrics.finished} tone="purple" /><Metric label="Warnings" value={metrics.warnings} tone="red" />
-          <div className="db-pill">{health ? `${health.db_path} · schema ${health.schema_version ?? "?"}` : "Checking service..."}</div>
-        </section>
+        {activeTab === "runs" ? (
+          <section className="runs-status-strip" aria-label="Runs summary">
+            <div className="runs-status-metrics">
+              <span><strong className="runs-metric-mons">{metrics.mons}</strong> Mons</span>
+              <span><strong className="runs-metric-active">{metrics.active}</strong> Active</span>
+              <span><strong className="runs-metric-queued">{metrics.queued}</strong> Queued</span>
+              <span><strong className="runs-metric-finished">{metrics.finished}</strong> Finished</span>
+              <span><strong className="runs-metric-warnings">{metrics.warnings}</strong> Warnings</span>
+            </div>
+            <div className="runs-db-path">{health ? `${health.db_path} · schema ${health.schema_version ?? "?"}` : "Checking service..."}</div>
+          </section>
+        ) : (
+          <section className="status-strip" aria-label="Workspace summary">
+            <Metric label="Mons" value={metrics.mons} tone="blue" /><Metric label="Active" value={metrics.active} tone="green" /><Metric label="Queued" value={metrics.queued} tone="amber" /><Metric label="Finished" value={metrics.finished} tone="purple" /><Metric label="Warnings" value={metrics.warnings} tone="red" />
+            <div className="db-pill">{health ? `${health.db_path} · schema ${health.schema_version ?? "?"}` : "Checking service..."}</div>
+          </section>
+        )}
         <section className="tab-surface">{children}</section>
       </section>
       {floatingLayer}

@@ -11,6 +11,8 @@ import {
   outcomeTone,
   renderRunTranscript,
   runAcceptsInput,
+  runStateLabel,
+  runVisualState,
   statusTone
 } from "./runViewModel";
 
@@ -58,59 +60,67 @@ export function RunDetail(props: RunDetailProps) {
 
   return (
     <div className={props.compact ? "run-review run-review-compact" : "run-review"}>
-      <header className="review-head">
-        <div className="review-title">
-          <div className="review-title-kicker">
-            <Badge tone={statusTone(run.status)}>{run.status}</Badge>
-            <span>{monIdDisplayName(run.mon_id)}</span>
-            <span>{ageLabel(run.started_at ?? run.created_at)}</span>
-          </div>
-          <h3 title={run.intent.title}>{run.intent.title}</h3>
-          <span className="run-id" title={run.id}>{run.id}</span>
-        </div>
-        <div className="review-actions">
-          {run.status === "queued" ? <button className="run-primary-action" onClick={props.onStart}>Start</button> : null}
-          {run.status === "active" || run.status === "starting" ? (
-            <>
-              <button onClick={props.onInterrupt}>Interrupt</button>
-              <button onClick={props.onStop}>Stop</button>
-            </>
-          ) : null}
-          <button onClick={props.onRefresh}>Refresh</button>
-        </div>
-      </header>
+      <div className="run-detail-sticky">
+        <div className="run-detail-inner">
+          <header className="review-head">
+            <div className="review-title">
+              <div className="review-title-kicker">
+                <span className={`run-state-label run-state-label-${runVisualState(run)}`}>{runStateLabel(run)}</span>
+                <span aria-hidden="true">·</span>
+                <span>{monIdDisplayName(run.mon_id)}</span>
+                <span aria-hidden="true">·</span>
+                <span>{ageLabel(run.started_at ?? run.created_at)}</span>
+              </div>
+              <h3 title={run.intent.title}>{run.intent.title}</h3>
+              <span className="run-id" title={run.id}>{run.id}</span>
+            </div>
+            <div className="review-actions">
+              {run.status === "queued" ? <button className="run-primary-action" onClick={props.onStart}>Start</button> : null}
+              {run.status === "active" || run.status === "starting" ? (
+                <>
+                  <button onClick={props.onInterrupt}>Interrupt</button>
+                  <button onClick={props.onStop}>Stop</button>
+                </>
+              ) : null}
+              <button onClick={props.onRefresh}>Refresh</button>
+            </div>
+          </header>
 
-      <div className="run-summary-strip">
-        <Badge tone={run.interaction_mode === "hitl_thread" ? "blue" : "default"}>{run.interaction_mode === "hitl_thread" ? "Thread" : "One-shot"}</Badge>
-        <Badge>{threadRuntimeLabel(run.runtime_state)}</Badge>
-        {run.outcome !== "unknown" ? <Badge tone={outcomeTone(run.outcome)}>{run.outcome}</Badge> : null}
-        <Badge>{String(run.execution?.runner_type ?? run.execution?.runner ?? "runner unknown")}</Badge>
-        <Badge tone={run.execution?.can_write === true ? "amber" : "default"}>{run.execution?.can_write === true ? "write enabled" : "read only"}</Badge>
-        {run.warnings?.length ? <Badge tone="red">{run.warnings.length} warning{run.warnings.length === 1 ? "" : "s"}</Badge> : null}
+          <div className="run-summary-strip">
+            <Badge>{run.interaction_mode === "hitl_thread" ? "Thread" : "One-shot"}</Badge>
+            <Badge>{threadRuntimeLabel(run.runtime_state)}</Badge>
+            {run.outcome !== "unknown" ? <Badge tone={outcomeTone(run.outcome)}>{run.outcome}</Badge> : null}
+            <Badge>{String(run.execution?.runner_type ?? run.execution?.runner ?? "runner unknown")}</Badge>
+            <Badge tone={run.execution?.can_write === true ? "amber" : "default"}>{run.execution?.can_write === true ? "write enabled" : "read only"}</Badge>
+            {run.warnings?.length ? <Badge tone="red">{run.warnings.length} warning{run.warnings.length === 1 ? "" : "s"}</Badge> : null}
+          </div>
+
+          <nav className="run-detail-tabs" aria-label="Run detail sections">
+            {detailTabs.map((detailTab) => (
+              <button
+                className={activeDetailTab === detailTab ? "run-detail-tab run-detail-tab-active" : "run-detail-tab"}
+                type="button"
+                key={detailTab}
+                onClick={() => setActiveDetailTab(detailTab)}
+              >
+                {tabLabel(detailTab)}
+                {detailTab === "evidence" && (props.artifacts.length || props.logs.length) ? <span>{props.artifacts.length + props.logs.length}</span> : null}
+              </button>
+            ))}
+          </nav>
+        </div>
       </div>
 
-      <nav className="run-detail-tabs" aria-label="Run detail sections">
-        {detailTabs.map((detailTab) => (
-          <button
-            className={activeDetailTab === detailTab ? "run-detail-tab run-detail-tab-active" : "run-detail-tab"}
-            type="button"
-            key={detailTab}
-            onClick={() => setActiveDetailTab(detailTab)}
-          >
-            {tabLabel(detailTab)}
-            {detailTab === "evidence" && (props.artifacts.length || props.logs.length) ? <span>{props.artifacts.length + props.logs.length}</span> : null}
-          </button>
-        ))}
-      </nav>
-
       <div className="run-detail-content" data-detail-tab={activeDetailTab}>
-        {activeDetailTab === "overview" ? (
-          <OverviewTab props={props} reviewed={reviewed} processUnknown={processUnknown} />
-        ) : null}
-        {activeDetailTab === "output" ? <OutputTab props={props} acceptsInput={acceptsInput} /> : null}
-        {activeDetailTab === "changes" ? <ChangesTab run={run} artifacts={props.artifacts} artifactDetails={props.artifactDetails} /> : null}
-        {activeDetailTab === "evidence" ? <EvidenceTab props={props} /> : null}
-        {activeDetailTab === "configuration" ? <ConfigurationTab props={props} acceptsInput={acceptsInput} /> : null}
+        <div className="run-detail-inner">
+          {activeDetailTab === "overview" ? (
+            <OverviewTab props={props} reviewed={reviewed} processUnknown={processUnknown} />
+          ) : null}
+          {activeDetailTab === "output" ? <OutputTab props={props} acceptsInput={acceptsInput} /> : null}
+          {activeDetailTab === "changes" ? <ChangesTab run={run} artifacts={props.artifacts} artifactDetails={props.artifactDetails} /> : null}
+          {activeDetailTab === "evidence" ? <EvidenceTab props={props} /> : null}
+          {activeDetailTab === "configuration" ? <ConfigurationTab props={props} acceptsInput={acceptsInput} /> : null}
+        </div>
       </div>
     </div>
   );
@@ -120,56 +130,71 @@ function OverviewTab({ props, reviewed, processUnknown }: { props: RunDetailProp
   const { run } = props;
   return (
     <section className="run-detail-page run-overview-page">
-      {run.status === "finished" && !reviewed ? (
-        <section className="review-decision">
-          <div>
-            <p className="eyebrow">Operator review</p>
-            <h4>{processUnknown ? "This run needs an outcome" : "Confirm this run's outcome"}</h4>
-            <p>{processUnknown ? "The process exited, but its semantic result has not been reviewed." : `The recorded outcome is ${run.outcome}.`}</p>
-          </div>
-          <input value={props.reviewSummary} onChange={(event) => props.setReviewSummary(event.target.value)} placeholder="Outcome summary (optional)" />
-          <textarea value={props.reviewNotes} onChange={(event) => props.setReviewNotes(event.target.value)} placeholder="Review notes (optional)" />
-          <div className="review-form-actions">
-            <button className="run-primary-action" type="button" onClick={() => props.onReview("completed")}>Approve as completed</button>
-            <button type="button" onClick={() => props.onReview("failed")}>Mark failed</button>
-            <button type="button" onClick={() => props.onReview("stopped")}>Mark stopped</button>
-          </div>
-        </section>
-      ) : reviewed ? (
-        <div className="review-notice review-notice-reviewed">
-          Reviewed by {String(run.result?.reviewed_by ?? "operator")} at {formatDate(String(run.result?.reviewed_at))}.
-        </div>
-      ) : null}
+      <div className="run-overview">
+        <div className="run-overview-main">
+          {run.status === "finished" && !reviewed ? (
+            <section className="review-decision operator-review">
+              <div className="review-decision-copy">
+                <p className="eyebrow">Operator review</p>
+                <h4>{processUnknown ? "This run needs an outcome" : "Confirm this run's outcome"}</h4>
+                <p>{processUnknown ? "The process exited, but its semantic result has not been reviewed." : `The recorded outcome is ${run.outcome}.`}</p>
+              </div>
+              <div className="review-decision-fields">
+                <label>
+                  <span>Outcome summary</span>
+                  <input value={props.reviewSummary} onChange={(event) => props.setReviewSummary(event.target.value)} placeholder="Optional summary" />
+                </label>
+                <label>
+                  <span>Review notes</span>
+                  <textarea value={props.reviewNotes} onChange={(event) => props.setReviewNotes(event.target.value)} placeholder="Optional notes" />
+                </label>
+              </div>
+              <div className="review-form-actions">
+                <div className="review-secondary-actions">
+                  <button className="run-failure-action" type="button" onClick={() => props.onReview("failed")}>Mark failed</button>
+                  <button type="button" onClick={() => props.onReview("stopped")}>Mark stopped</button>
+                </div>
+                <button className="run-primary-action" type="button" onClick={() => props.onReview("completed")}>Approve completed</button>
+              </div>
+            </section>
+          ) : reviewed ? (
+            <div className="review-notice review-notice-reviewed">
+              Reviewed by {String(run.result?.reviewed_by ?? "operator")} at {formatDate(String(run.result?.reviewed_at))}.
+            </div>
+          ) : null}
 
-      <div className="run-overview-grid">
-        <OverviewStat label="Current state" value={threadRuntimeLabel(run.runtime_state)} detail={`${run.process_status} process`} />
-        <OverviewStat label="Outcome" value={run.outcome_state === "unknown" ? run.outcome : run.outcome_state} detail={run.close_reason ?? "No close reason"} />
-        <OverviewStat label="Evidence" value={`${props.artifacts.length} artifacts`} detail={`${props.logs.length} log events`} />
-        <OverviewStat label="Execution" value={String(run.execution?.runner_type ?? run.execution?.runner ?? "Unknown runner")} detail={run.execution?.can_write === true ? "Write enabled" : "Read only"} />
+          <section className="intent-summary requested-work">
+            <div className="section-head compact-head">
+              <div><p className="eyebrow">Requested work</p><h4>{run.intent.title}</h4></div>
+              <Badge>{String(run.origin.type)}</Badge>
+            </div>
+            <pre className="requested-work-body">{run.intent.prompt}</pre>
+          </section>
+
+          {run.result && Object.keys(run.result).length ? (
+            <div className="result-summary">
+              <span className="eyebrow">Recorded result</span>
+              <strong>{String(run.result.summary ?? "No summary recorded.")}</strong>
+              {run.result.notes ? <p>{String(run.result.notes)}</p> : null}
+            </div>
+          ) : null}
+          {run.warnings?.length ? <div className="run-warning-list"><strong>Warnings</strong>{run.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div> : null}
+        </div>
+
+        <aside className="run-context" aria-label="Run context">
+          <p className="eyebrow">Run context</p>
+          <OverviewStat label="Current state" value={threadRuntimeLabel(run.runtime_state)} detail={`${run.process_status} process`} />
+          <OverviewStat label="Outcome" value={run.outcome_state === "unknown" ? run.outcome : run.outcome_state} detail={run.close_reason ?? "No close reason"} />
+          <OverviewStat label="Evidence" value={`${props.artifacts.length} artifacts`} detail={`${props.logs.length} log events`} />
+          <OverviewStat label="Execution" value={String(run.execution?.runner_type ?? run.execution?.runner ?? "Unknown runner")} detail={run.execution?.can_write === true ? "Write enabled" : "Read only"} />
+        </aside>
       </div>
-
-      <section className="intent-summary">
-        <div className="section-head compact-head">
-          <div><p className="eyebrow">Requested work</p><h4>{run.intent.title}</h4></div>
-          <Badge>{String(run.origin.type)}</Badge>
-        </div>
-        <pre>{run.intent.prompt}</pre>
-      </section>
-
-      {run.result && Object.keys(run.result).length ? (
-        <div className="result-summary">
-          <span className="eyebrow">Recorded result</span>
-          <strong>{String(run.result.summary ?? "No summary recorded.")}</strong>
-          {run.result.notes ? <p>{String(run.result.notes)}</p> : null}
-        </div>
-      ) : null}
-      {run.warnings?.length ? <div className="run-warning-list"><strong>Warnings</strong>{run.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div> : null}
     </section>
   );
 }
 
 function OverviewStat({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return <div className="run-overview-card"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
+  return <div className="run-context-section"><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>;
 }
 
 function OutputTab({ props, acceptsInput }: { props: RunDetailProps; acceptsInput: boolean }) {
@@ -231,7 +256,7 @@ function ConfigurationTab({ props, acceptsInput }: { props: RunDetailProps; acce
     <section className="run-detail-page">
       <div className="review-state">
         <MetadataGroup title="Run Kind">
-          <Badge tone={run.interaction_mode === "hitl_thread" ? "blue" : "default"}>{run.interaction_mode === "hitl_thread" ? "HITL Thread" : "One-shot"}</Badge>
+          <Badge>{run.interaction_mode === "hitl_thread" ? "HITL Thread" : "One-shot"}</Badge>
           <Badge>{threadRuntimeLabel(run.runtime_state)}</Badge>
           <Badge tone={run.outcome_state === "succeeded" ? "green" : run.outcome_state === "failed" ? "red" : "default"}>{run.outcome_state}</Badge>
           {run.close_reason ? <Badge>{run.close_reason}</Badge> : null}

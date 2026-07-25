@@ -3,7 +3,17 @@ import type { BadgeTone } from "../../components/ui";
 import { isRecord } from "../../lib/guards";
 
 export type RunAttentionKind = "active" | "warning" | "blocked" | "review" | "queued";
-export type RunVisualState = "active" | "queued" | "finished" | "review" | "warning" | "neutral";
+export type RunVisualState =
+  | "starting"
+  | "active"
+  | "queued"
+  | "blocked"
+  | "review"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | "closed"
+  | "neutral";
 
 export function runAcceptsInput(run: RunDto): boolean {
   return run.execution?.input_mode === "open" || run.execution?.interaction_mode === "interactive";
@@ -27,12 +37,49 @@ export function runRequiresAttention(run: RunDto): boolean {
 }
 
 export function runVisualState(run: RunDto): RunVisualState {
-  if (run.warnings?.length || run.status === "blocked") return "warning";
-  if (runNeedsReview(run)) return "review";
-  if (run.status === "active" || run.status === "starting") return "active";
+  if (run.status === "starting") return "starting";
+  if (run.status === "active") return "active";
   if (run.status === "queued") return "queued";
-  if (run.status === "finished") return "finished";
+  if (run.status === "blocked") return "blocked";
+  if (runNeedsReview(run)) return "review";
+  if (run.outcome === "completed" || run.outcome_state === "succeeded") return "completed";
+  if (run.outcome_state === "partial") return "review";
+  if (
+    run.outcome === "failed" ||
+    run.outcome === "interrupted" ||
+    run.outcome_state === "failed" ||
+    run.runtime_state === "failed"
+  ) return "failed";
+  if (
+    run.outcome === "stopped" ||
+    run.outcome === "canceled" ||
+    run.outcome_state === "abandoned" ||
+    run.runtime_state === "cancelled"
+  ) return "stopped";
+  if (run.runtime_state === "closed" || run.status === "finished") return "closed";
   return "neutral";
+}
+
+export function runStateLabel(run: RunDto): string {
+  if (run.status !== "finished") return run.status;
+  if (runNeedsReview(run)) return "review";
+  if (run.outcome !== "unknown") return run.outcome;
+  if (run.outcome_state !== "unknown") return run.outcome_state;
+  if (run.runtime_state === "cancelled") return "canceled";
+  if (run.runtime_state !== "queued" && run.runtime_state !== "running") return run.runtime_state;
+  return "closed";
+}
+
+export function runStateTone(run: RunDto): BadgeTone {
+  const state = runVisualState(run);
+  if (state === "starting") return "cyan";
+  if (state === "active" || state === "completed") return "green";
+  if (state === "queued") return "blue";
+  if (state === "review") return "amber";
+  if (state === "blocked" || state === "failed") return "red";
+  if (state === "stopped") return "pink";
+  if (state === "closed") return "purple";
+  return "default";
 }
 
 export function runAttentionLabel(run: RunDto): string {
@@ -65,17 +112,18 @@ export function hasDiffEvidence(run: RunDto, artifacts: ArtifactDto[]): boolean 
 }
 
 export function statusTone(status: string): BadgeTone {
-  if (status === "active" || status === "starting") return "green";
-  if (status === "queued") return "amber";
+  if (status === "starting") return "cyan";
+  if (status === "active") return "green";
+  if (status === "queued") return "blue";
   if (status === "blocked") return "red";
-  if (status === "finished") return "blue";
+  if (status === "finished") return "purple";
   return "default";
 }
 
 export function outcomeTone(outcome: string): BadgeTone {
   if (outcome === "completed") return "green";
   if (outcome === "failed" || outcome === "interrupted") return "red";
-  if (outcome === "stopped" || outcome === "canceled") return "amber";
+  if (outcome === "stopped" || outcome === "canceled") return "pink";
   return "default";
 }
 

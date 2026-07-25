@@ -10,8 +10,9 @@ import {
   runAttentionLabel,
   runNeedsReview,
   runRequiresAttention,
-  runVisualState,
-  statusTone
+  runStateLabel,
+  runStateTone,
+  runVisualState
 } from "./runViewModel";
 
 export interface RunNavigatorProps {
@@ -20,6 +21,8 @@ export interface RunNavigatorProps {
   selectedRunId?: string;
   onSelect(run: RunDto): void;
 }
+
+const collapsedRunLimit = 10;
 
 export function RunNavigator(props: RunNavigatorProps) {
   const [expandedMons, setExpandedMons] = useState<Record<string, boolean>>({});
@@ -43,8 +46,8 @@ export function RunNavigator(props: RunNavigatorProps) {
         const sortedRuns = [...group.runs].sort(compareRunsForNavigator);
         const expanded = expandedMons[group.id] ?? false;
         const priorityRuns = sortedRuns.filter(runRequiresAttention);
-        const recentRuns = sortedRuns.filter((run) => !runRequiresAttention(run)).slice(0, 3);
-        const visibleRuns = expanded ? sortedRuns : [...priorityRuns, ...recentRuns].slice(0, 7);
+        const recentRuns = sortedRuns.filter((run) => !runRequiresAttention(run)).slice(0, collapsedRunLimit);
+        const visibleRuns = expanded ? sortedRuns : [...priorityRuns, ...recentRuns].slice(0, collapsedRunLimit);
         const hiddenCount = sortedRuns.length - visibleRuns.length;
         const activeCount = sortedRuns.filter((run) => run.status === "active" || run.status === "starting").length;
         const reviewCount = sortedRuns.filter(runNeedsReview).length;
@@ -59,7 +62,7 @@ export function RunNavigator(props: RunNavigatorProps) {
             >
               <span className={activeCount ? "mon-run-presence mon-run-presence-active" : "mon-run-presence"} />
               <strong>{group.label}</strong>
-              <span>{sortedRuns.length}</span>
+              <span>{sortedRuns.length} run{sortedRuns.length === 1 ? "" : "s"}</span>
               {activeCount ? <Badge tone="green">{activeCount} active</Badge> : null}
               {reviewCount ? <Badge tone="amber">{reviewCount} review</Badge> : null}
               <span className="mon-run-chevron">{expanded ? "−" : "+"}</span>
@@ -73,7 +76,7 @@ export function RunNavigator(props: RunNavigatorProps) {
               <button className="show-mon-runs" type="button" onClick={() => setExpandedMons((current) => ({ ...current, [group.id]: true }))}>
                 Show {hiddenCount} more run{hiddenCount === 1 ? "" : "s"}
               </button>
-            ) : expanded && sortedRuns.length > 7 ? (
+            ) : expanded && sortedRuns.length > collapsedRunLimit ? (
               <button className="show-mon-runs" type="button" onClick={() => setExpandedMons((current) => ({ ...current, [group.id]: false }))}>
                 Show less
               </button>
@@ -87,18 +90,19 @@ export function RunNavigator(props: RunNavigatorProps) {
 
 function RunRow({ run, selected, onSelect }: { run: RunDto; selected: boolean; onSelect(): void }) {
   const attentionKind = runAttentionKind(run);
+  const visualState = runVisualState(run);
   const className = [
     "run-row",
-    `run-row-state-${runVisualState(run)}`,
+    `run-row-state-${visualState}`,
     selected ? "run-row-selected" : "",
     attentionKind ? `run-row-attention run-row-attention-${attentionKind}` : ""
   ].filter(Boolean).join(" ");
 
   return (
-    <button className={className} type="button" onClick={onSelect}>
+    <button className={className} type="button" aria-selected={selected} onClick={onSelect}>
       <span className="run-row-indicator">
-        <span className={`run-status-dot run-status-${run.status}`} />
-        {attentionKind ? (
+        <span className={`run-status-dot run-status-${visualState}`} />
+        {attentionKind && !(run.status === "finished" && attentionKind === "warning") ? (
           <span className="run-attention-icon" title={runAttentionLabel(run)} aria-label={runAttentionLabel(run)}>
             {runAttentionIcon(attentionKind)}
           </span>
@@ -109,10 +113,9 @@ function RunRow({ run, selected, onSelect }: { run: RunDto; selected: boolean; o
         <span>{String(run.origin.type)} · {ageLabel(run.started_at ?? run.created_at)}</span>
       </span>
       <span className="run-row-pills">
-        <Badge tone={statusTone(run.status)}>{run.status}</Badge>
-        {run.interaction_mode === "hitl_thread" ? <Badge tone="blue">thread</Badge> : null}
+        <Badge tone={runStateTone(run)}>{runStateLabel(run)}</Badge>
+        {run.interaction_mode === "hitl_thread" ? <Badge>thread</Badge> : null}
         {run.execution?.can_write === true ? <Badge tone="amber">write</Badge> : null}
-        {runNeedsReview(run) ? <Badge tone="amber">review</Badge> : null}
         {run.warnings?.length ? <Badge tone="red">!{run.warnings.length}</Badge> : null}
       </span>
     </button>
