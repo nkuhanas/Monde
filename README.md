@@ -198,20 +198,24 @@ One-shot runs are process-bounded work. HITL threads are user-session-bounded
 conversations. Both share the same run evidence model, but expose different
 state to the operator.
 
-Write-capable runs are explicit. Codex defaults to read-only unless a write
-sandbox is requested, and write runs capture metadata and diff evidence when
-Git context is available.
+Codex write-capable runs are explicit. Codex defaults to read-only unless a
+write sandbox is requested, and write runs capture metadata and diff evidence
+when Git context is available. `basic-process` has a different trust boundary:
+it is unsandboxed and runs with the Monde service user's operating-system
+permissions.
 
 ## Runtime support today
 
 | Harness | Status | Use when |
 |---|---|---|
-| `basic-process` | Reliable local fallback | You want shell/process runs, smoke tests, and stdin-capable local work |
+| `basic-process` | Unsandboxed local fallback | You want trusted shell/process runs, smoke tests, and stdin-capable local work |
 | Codex | Supported through `codex exec` | You want scoped read/write agent work with run evidence |
 | opencode | Detection and conservative integration path | You are evaluating adapter breadth or future harness support |
 
 Monde keeps harness credentials run-scoped. Harnesses receive `MONDE_RUN_ID`
-and `MONDE_RUN_TOKEN`; they do not receive the root local service token.
+and `MONDE_RUN_TOKEN`; they do not intentionally receive the root local service
+token. Run tokens expire when a one-shot process finishes or a HITL adapter
+turn ends or times out.
 
 ## Docs
 
@@ -228,6 +232,7 @@ Detailed docs live in `.monde/docs/`:
 - `.monde/docs/review-flow.md` - review and semantic outcome handling
 - `.monde/docs/api-contracts.md` - frontend/backend DTO and endpoint contracts
 - `.monde/docs/harness-liveness.md` - HITL idle and hard timeout model
+- `.monde/docs/security-model.md` - local trust boundary, scope, environment, auth
 
 Harnesses can search these docs through Monde's `search_docs` tool.
 

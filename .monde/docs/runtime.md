@@ -22,7 +22,7 @@ Current MVP stack:
 
 ```text
 Runtime/service:   TypeScript + Node.js
-HTTP/API:          Fastify, CORS, websocket dependency
+HTTP/API:          Fastify, CORS, and SSE event streaming
 MCP:               loopback HTTP JSON-RPC plus `monde mcp bridge`
 Database:          Node built-in `node:sqlite` with local migrations
 Frontend:          React + Vite + xterm.js
@@ -42,6 +42,11 @@ The service starts two loopback Fastify servers:
 web/API: http://127.0.0.1:3761
 MCP:     http://127.0.0.1:3762/mcp
 ```
+
+Only loopback binding is supported by the current security model. Setting
+`MONDE_HOST` to a non-loopback address exposes bearer-token APIs without the
+authentication, TLS, proxy, and multi-user isolation required for a remote
+deployment and is therefore unsupported.
 
 The Vite web UI defaults to:
 
@@ -97,6 +102,17 @@ MONDE_RUN_TOKEN    authorization
 
 The service token should not be passed to harnesses.
 
+Run-token validity is bounded by active execution:
+
+- a one-shot token is valid only while its run is `starting` or `active`
+- a HITL token is additionally valid only during the current, non-timed-out
+  adapter turn
+- the token hash is removed when the process or turn ends, is stopped, fails,
+  is canceled, is lost on restart, or times out
+
+Harness processes receive an allowlisted environment rather than the service's
+complete environment. See `security-model.md` and `harnesses.md`.
+
 MCP rejects browser-originated requests unless `MONDE_ALLOW_BROWSER_MCP=1`.
 The web backend and Vite UI use strict local-origin CORS.
 
@@ -115,7 +131,7 @@ PRAGMA journal_mode = WAL
 PRAGMA foreign_keys = ON
 ```
 
-Operational continuity depends on the DB file:
+Operational continuity depends on the DB:
 
 ```bash
 monde doctor
@@ -124,7 +140,10 @@ monde backup create
 monde backup list
 ```
 
-Full export/import or restore remains post-MVP.
+`monde backup create` uses SQLite's online backup API. This produces a
+transactionally consistent database including committed WAL state while the
+service is running. The backup and its metadata are user-readable only. Full
+export/import and an operator-facing restore command remain post-MVP.
 
 ## Startup And Restart Behavior
 
@@ -150,8 +169,15 @@ model
 capabilities
 ```
 
-`work_root` is resolved from the mon root and is the expected working directory
-for harness work.
+All roots are resolved to canonical, existing directories at run start.
+`work_root` must remain inside the canonical Monde root unless
+`allow_external_work_root` is explicitly true in `mon.json`. This containment
+check is applied to relative paths, absolute paths, and symlink targets.
+
+`work_root` is the expected working directory for harness work. It is a real
+sandbox boundary only when the selected adapter enforces one. In particular,
+`basic-process` is unsandboxed and retains all filesystem permissions of the
+service user.
 
 Stale scope detection is polling-based for MVP. The run manager periodically
 checks fingerprinted scope files and adds `stale_scope` warnings when the

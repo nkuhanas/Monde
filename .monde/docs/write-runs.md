@@ -1,7 +1,8 @@
 # Write Runs
 
-Write-capable runs are explicit. Codex defaults to read-only; use `--write` or
-`--sandbox workspace-write` when the operator intends bounded writes.
+Codex write-capable runs are explicit. Codex defaults to read-only; use
+`--write` or `--sandbox workspace-write` when the operator intends bounded
+writes.
 
 ```bash
 monde message frontend.mon "Make the UI fix" --harness codex --write
@@ -17,6 +18,11 @@ Monde stores write metadata on `run.execution`:
 - `diff_capture`
 
 For Codex, `write_scope` is the resolved mon `work_root`.
+
+This is adapter-specific. `basic-process` does not implement an OS sandbox:
+its declared work root is context and a working directory, not an enforced
+write boundary. Basic-process commands must therefore be trusted as the Monde
+service user.
 
 ## Evidence Capture
 

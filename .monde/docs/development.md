@@ -5,8 +5,9 @@ the root README.
 
 ## Prerequisites
 
-Monde is a TypeScript monorepo on Node.js. The service uses Node's built-in
-SQLite binding, so use a recent Node 22 runtime with `node:sqlite` available.
+Monde is a TypeScript monorepo on Node.js. Use Node.js 22.16.0 or newer; the
+backup command uses the online-backup API provided by Node's built-in SQLite
+binding.
 
 The repo uses npm workspaces:
 
@@ -14,6 +15,7 @@ The repo uses npm workspaces:
 npm install
 npm run build
 npm run check
+npm test
 ```
 
 `npm run check` builds shared packages first, then runs no-emit TypeScript
@@ -95,6 +97,21 @@ inspect runs, mons, plans, artifacts, status, and review state.
 
 ## Smoke Suites
 
+Focused security and backup regressions run with:
+
+```bash
+npm test
+```
+
+The deterministic smoke gate builds once, does not invoke external agent
+providers, and runs each smoke independently:
+
+```bash
+npm run smoke:ci
+```
+
+`npm run smoke:all` runs the focused tests followed by `smoke:ci`.
+
 Useful targeted smoke suites:
 
 ```bash
@@ -103,14 +120,14 @@ npm run smoke:local-alpha
 npm run smoke:harness-alpha
 npm run smoke:harness-beta
 npm run smoke:write-evidence
-npm run smoke:codex-write
 npm run smoke:beta-review
 ```
 
-Run the full suite:
+External Codex invocations are deliberately opt-in and separate from the
+deterministic gate:
 
 ```bash
-npm run smoke:all
+npm run smoke:external
 ```
 
 Smoke tests create temporary Monde roots and runtime state. They should not
@@ -128,5 +145,8 @@ monde backup list
 ```
 
 `doctor` and backup info print the DB path because the SQLite file is the
-source of local operational continuity. Full import/export and restore remain
-post-MVP.
+source of local operational continuity. `backup create` uses SQLite's online
+backup operation, so it includes committed WAL state without requiring the
+service to stop. The focused test suite checks integrity and opens a copied
+backup as a restore rehearsal. Full import/export and an operator-facing
+restore command remain post-MVP.

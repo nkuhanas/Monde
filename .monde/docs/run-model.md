@@ -30,6 +30,18 @@ Examples:
 This means the process exited cleanly, but the operator has not asserted that
 the intended work succeeded.
 
+The corresponding extended lifecycle fields are also conservative:
+
+```text
+runtime_state = closed
+outcome_state = unknown
+close_reason = process_exited
+```
+
+`outcome = unknown` and `outcome_state = unknown` must agree after a clean
+one-shot exit. A migration repairs older rows that paired an unknown outcome
+with `outcome_state = succeeded`.
+
 ## One-Shot Runs And HITL Threads
 
 Runs carry a top-level interaction mode:

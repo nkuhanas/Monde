@@ -20,15 +20,37 @@ MONDE_HARNESS_ADAPTER
 MONDE_RUNNER_TYPE
 ```
 
+The service inherits only this allowlist from its own environment:
+
+```text
+PATH HOME USER LOGNAME SHELL
+TMPDIR TMP TEMP
+LANG LC_ALL LC_CTYPE COLORTERM NO_COLOR FORCE_COLOR
+XDG_CONFIG_HOME XDG_CACHE_HOME
+```
+
+Adapter-defined values and the explicit `MONDE_*`, terminal-size, and terminal
+type values above are added separately. Other service environment variables,
+including cloud credentials, API keys, SSH agent sockets, `NODE_OPTIONS`, and
+the local service token, are not inherited by harness processes.
+
 MCP calls authenticate with `MONDE_RUN_ID` and `MONDE_RUN_TOKEN`.
 The local service token is reserved for the CLI/web/backend and should not be
-injected into harnesses.
+injected into harnesses. A one-shot token expires when its process finishes. A
+HITL token is valid only during its current adapter turn and expires when that
+turn ends or times out.
 
 ## Basic Process
 
 `basic-process` is the reliable fallback harness for local smoke tests. It
 spawns a local shell/process from the mon root, captures output as run events,
 and accepts stdin where the process supports it.
+
+**Unsandboxed execution under the Monde service user’s operating-system
+permissions.** `MONDE_WORK_ROOT` and the process working directory guide the
+command, but they are not an OS-enforced filesystem boundary. A trusted
+`basic-process` command can access any path and network resource available to
+that user.
 
 It is useful for proving:
 
@@ -75,6 +97,8 @@ diff_capture
 ```
 
 For Codex, `write_scope` is the resolved mon `work_root`.
+Codex sandbox behavior is enforced by the Codex CLI, not by
+`basic-process`.
 
 ## Liveness And Timeouts
 
