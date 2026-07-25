@@ -1,0 +1,21 @@
+[Unit]
+Description=Monde local Vite web application
+Wants=monde-service.service
+After=monde-service.service
+PartOf=monde-dev.target
+StartLimitIntervalSec=30
+StartLimitBurst=10
+
+[Service]
+Type=simple
+WorkingDirectory=@MONDE_ROOT@
+Environment=MONDE_WEB_PORT=3761
+Environment=MONDE_UI_PORT=5175
+ExecStart=/usr/bin/npm run dev:web
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+KillMode=control-group
+
+[Install]
+WantedBy=monde-dev.target

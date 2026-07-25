@@ -1,0 +1,7 @@
+[Unit]
+Description=Monde local development stack
+Wants=monde-service.service monde-web.service
+After=monde-service.service monde-web.service
+
+[Install]
+WantedBy=default.target
