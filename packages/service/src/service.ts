@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import websocket from "@fastify/websocket";
 import { loadOrCreateServiceAuth } from "./auth.js";
 import { loadServiceConfig } from "./config.js";
 import { openDatabase } from "./db.js";
@@ -67,7 +66,6 @@ export async function createService() {
       callback(new Error("origin_not_allowed"), false);
     }
   });
-  await app.register(websocket);
 
   app.addHook("onRequest", async (request, reply) => {
     if (request.url === "/health") {
