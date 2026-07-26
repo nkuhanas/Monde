@@ -1603,7 +1603,8 @@ function backupInfo(): BackupInfoDto {
     backup_directory: backupDir(paths.dataDir),
     latest_backup: listBackups().at(-1)?.backup_path ?? null,
     continuity_warning: "Operational continuity depends on the local SQLite DB.",
-    future_recovery_path: "export/import or backup/restore"
+    future_recovery_path:
+      "monde backup verify <path>; monde backup rehearse <path> --destination <new-directory>"
   };
 }
 

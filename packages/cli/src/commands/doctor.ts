@@ -55,7 +55,8 @@ export async function doctor(): Promise<void> {
 
   findings.push({
     level: "warn",
-    message: "Operational continuity depends on the local SQLite DB; use future export/import or backup/restore for recovery."
+    message:
+      "Operational continuity depends on the local SQLite DB; create and verify backups, then rehearse restores into an isolated destination."
   });
   const platformPaths = getMondePlatformPaths();
   findings.push({ level: "ok", message: `SQLite DB path: ${platformPaths.dbPath}` });

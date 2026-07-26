@@ -221,6 +221,32 @@ export interface BackupMetadataDto {
   backup_path: string;
   schema_version: number | string;
   size: number;
+  sha256?: string;
+  checksum_algorithm?: "sha256";
+  integrity_check?: "ok";
+}
+
+export interface BackupVerificationDto {
+  backup_path: string;
+  metadata_path: string | null;
+  schema_version: number | string;
+  size: number;
+  sha256: string;
+  recorded_sha256: string | null;
+  checksum_matches: boolean;
+  integrity_check: string;
+  foreign_key_violations: number;
+  valid: boolean;
+}
+
+export interface BackupRestoreRehearsalDto {
+  source_backup_path: string;
+  destination_directory: string;
+  restored_db_path: string;
+  report_path: string;
+  source_verification: BackupVerificationDto;
+  restored_verification: BackupVerificationDto;
+  rehearsed_at: string;
 }
 
 export interface BackupInfoDto {

@@ -5,7 +5,13 @@ import { createMon } from "./commands/mon.js";
 import { messageMon } from "./commands/message.js";
 import { listArtifacts, registerArtifact, showArtifact } from "./commands/artifact.js";
 import { listAdapters, inspectAdapter, verifyAdapterIsolation } from "./commands/adapter.js";
-import { backupCreate, backupInfo, backupList } from "./commands/backup.js";
+import {
+  backupCreate,
+  backupInfo,
+  backupList,
+  backupRehearse,
+  backupVerify
+} from "./commands/backup.js";
 import { doctor, repair } from "./commands/doctor.js";
 import { bridgeMcp } from "./commands/mcp.js";
 import { activatePlan, assignPlan, createPlan, listPlans, searchPlans, showPlan } from "./commands/plan.js";
@@ -151,6 +157,20 @@ const backup = program.command("backup").description("Inspect local continuity a
 backup.command("info").action(backupInfo);
 backup.command("create").description("create a consistent online backup of the operational SQLite DB").action(backupCreate);
 backup.command("list").description("list local SQLite backups").action(backupList);
+backup
+  .command("verify")
+  .argument("<backup-path>")
+  .description("verify a backup checksum, SQLite integrity, and foreign keys")
+  .action(backupVerify);
+backup
+  .command("rehearse")
+  .argument("<backup-path>")
+  .requiredOption(
+    "--destination <directory>",
+    "new isolated directory; existing and live-data destinations are refused"
+  )
+  .description("restore and verify a backup in an isolated destination")
+  .action(backupRehearse);
 
 program.command("doctor").description("Inspect local Monde health and continuity risks").action(doctor);
 program.command("repair").description("Run conservative local repair actions").action(repair);
