@@ -167,6 +167,53 @@ test("cancellation remains observable until process exit acknowledgement", (t) =
   assert.equal(acknowledged.cancellation_state, "acknowledged");
 });
 
+test("completion, cancellation, and exit ordering produces one deterministic outcome", (t) => {
+  const { executions } = fixture(t);
+  const cancelled = create(executions, {
+    runId: "run_cancel_completion_race",
+    key: "queue:cancel-completion-race"
+  }).execution;
+  executions.updatePhase(cancelled.id, "active");
+  executions.requestCancellation(cancelled.id, false);
+  executions.recordCompletion({
+    id: cancelled.id,
+    digest: canonicalSha256({ completion_receipt: { assertion: "valid" } }),
+    receipt: { assertion: "valid" }
+  });
+  const cancellationWon = executions.recordProcessExit(
+    cancelled.id,
+    { code: 0, signal: null },
+    86400
+  );
+  assert.equal(cancellationWon.phase, "terminal");
+  assert.equal(cancellationWon.outcome, "cancelled");
+  assert.equal(cancellationWon.cancellation_state, "acknowledged");
+
+  const succeeded = create(executions, {
+    runId: "run_completion_exit_race",
+    key: "queue:completion-exit-race"
+  }).execution;
+  executions.updatePhase(succeeded.id, "active");
+  executions.recordCompletion({
+    id: succeeded.id,
+    digest: canonicalSha256({ completion_receipt: { assertion: "valid" } }),
+    receipt: { assertion: "valid" }
+  });
+  const completionWon = executions.recordProcessExit(
+    succeeded.id,
+    { code: 0, signal: null },
+    86400
+  );
+  assert.equal(completionWon.phase, "terminal");
+  assert.equal(completionWon.outcome, "succeeded");
+  assert.throws(
+    () => executions.requestCancellation(succeeded.id, false),
+    (error) =>
+      error instanceof ExternalExecutionConflictError &&
+      error.code === "terminal_conflict"
+  );
+});
+
 test("missing completion expires as a failed condition, not a lost outcome", (t) => {
   const { executions } = fixture(t);
   const execution = create(executions, { runId: "run_missing" }).execution;

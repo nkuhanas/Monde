@@ -20,6 +20,10 @@ import {
   ExternalExecutionRepository
 } from "./repositories/external-executions.js";
 import { ExternalMcpGrantRepository } from "./repositories/external-mcp-grants.js";
+import {
+  ExecutionManifestConflictError,
+  ExecutionManifestRepository
+} from "./repositories/execution-manifests.js";
 import { LogRepository } from "./repositories/logs.js";
 import { MonRepository, type MonRow, type MonUpsert } from "./repositories/mons.js";
 import { MondeRepository } from "./repositories/mondes.js";
@@ -71,12 +75,58 @@ const MonPatchSchema = z
   })
   .strict();
 
+const RequiredJsonValueSchema = z
+  .unknown()
+  .refine((value) => value !== undefined, "A JSON value is required.");
+
+const ExecutionManifestOutputSchema = z
+  .object({
+    logical_name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/),
+    staging_ref: z.discriminatedUnion("type", [
+      z.object({
+        type: z.literal("local_path"),
+        path: z.string().min(1).max(4096)
+      }),
+      z.object({
+        type: z.literal("opaque"),
+        value: RequiredJsonValueSchema
+      })
+    ]),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    byte_size: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    media_type: z.string().min(3).max(255),
+    integration_metadata: RequiredJsonValueSchema.optional()
+  })
+  .strict();
+
+const ExecutionManifestSchema = z
+  .object({
+    outputs: z.array(ExecutionManifestOutputSchema).min(1).max(128),
+    integration_metadata: RequiredJsonValueSchema.optional(),
+    manifest_digest: z.string().regex(/^[a-f0-9]{64}$/)
+  })
+  .strict()
+  .superRefine((manifest, context) => {
+    const names = new Set<string>();
+    for (const [index, output] of manifest.outputs.entries()) {
+      if (names.has(output.logical_name)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["outputs", index, "logical_name"],
+          message: `Duplicate manifest output: ${output.logical_name}`
+        });
+      }
+      names.add(output.logical_name);
+    }
+  });
+
 export interface RouteDeps {
   database: MondeDatabase;
   auth: ServiceAuth;
   mondes: MondeRepository;
   externalExecutions: ExternalExecutionRepository;
   externalMcpGrants: ExternalMcpGrantRepository;
+  executionManifests: ExecutionManifestRepository;
   mons: MonRepository;
   plans: PlanRepository;
   runs: RunRepository;
@@ -163,7 +213,8 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     runManager,
     tools,
     externalExecutions,
-    externalMcpGrants
+    externalMcpGrants,
+    executionManifests
   } = deps;
   const logs = new LogRepository(deps.database.db);
   const artifacts = new ArtifactRepository(deps.database.db);
@@ -486,8 +537,8 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
         mon_id: z.string().min(1),
         input: z.object({ kind: z.literal("prompt"), prompt: z.string().min(1).max(1024 * 1024) }),
         harness_override: z.string().min(1).optional(),
-        external_scope: z.unknown(),
-        external_context: z.unknown(),
+        external_scope: RequiredJsonValueSchema,
+        external_context: RequiredJsonValueSchema,
         artifact_sink_ref: z.unknown().optional(),
         external_lineage: z.unknown().optional(),
         predecessor: z
@@ -559,6 +610,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return reply.code(reserved.created ? 201 : 200).send({
         execution,
         run: runs.get(execution.run_id),
+        manifest: executionManifests.getByExecution(execution.id) ?? null,
         created: reserved.created
       });
     } catch (error) {
@@ -580,7 +632,11 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     if (!execution) {
       return reply.code(404).send({ error: "external_execution_not_found" });
     }
-    return { execution, run: runs.get(execution.run_id) };
+    return {
+      execution,
+      run: runs.get(execution.run_id),
+      manifest: executionManifests.getByExecution(execution.id) ?? null
+    };
   });
 
   app.get("/external-executions/:id", async (request, reply) => {
@@ -589,7 +645,11 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     if (!execution) {
       return reply.code(404).send({ error: "external_execution_not_found" });
     }
-    return { execution, run: runs.get(execution.run_id) };
+    return {
+      execution,
+      run: runs.get(execution.run_id),
+      manifest: executionManifests.getByExecution(execution.id) ?? null
+    };
   });
 
   app.get("/runs/:id/external-execution", async (request, reply) => {
@@ -598,7 +658,128 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     if (!execution) {
       return reply.code(404).send({ error: "external_execution_not_found" });
     }
-    return { execution };
+    return {
+      execution,
+      manifest: executionManifests.getByExecution(execution.id) ?? null
+    };
+  });
+
+  app.put("/external-executions/:id/manifest", async (request, reply) => {
+    const params = request.params as { id: string };
+    if (!externalExecutions.get(params.id)) {
+      return reply.code(404).send({ error: "external_execution_not_found" });
+    }
+    const body = ExecutionManifestSchema.parse(request.body);
+    try {
+      if (body.integration_metadata !== undefined) {
+        assertCanonicalSize(body.integration_metadata, 64 * 1024, "manifest integration_metadata");
+      }
+      for (const output of body.outputs) {
+        assertCanonicalSize(output.staging_ref, 32 * 1024, `manifest output ${output.logical_name} staging_ref`);
+        if (output.integration_metadata !== undefined) {
+          assertCanonicalSize(
+            output.integration_metadata,
+            32 * 1024,
+            `manifest output ${output.logical_name} integration_metadata`
+          );
+        }
+      }
+    } catch (error) {
+      return reply.code(422).send({
+        error: "payload_too_large",
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+
+    const { manifest_digest: _manifestDigest, ...digestPayload } = body;
+    const computedDigest = canonicalSha256(digestPayload);
+    if (computedDigest !== body.manifest_digest) {
+      return reply.code(422).send({
+        error: "manifest_digest_mismatch",
+        computed_digest: computedDigest
+      });
+    }
+
+    try {
+      const registered = executionManifests.register({
+        externalExecutionId: params.id,
+        manifestDigest: body.manifest_digest,
+        outputs: body.outputs,
+        integrationMetadata: body.integration_metadata
+      });
+      const manifest = registered.manifest;
+      eventBus.publish(manifest.run_id, registered.created ? "execution_manifest_registered" : "execution_manifest_replayed", {
+        run_id: manifest.run_id,
+        external_execution_id: params.id,
+        manifest_id: manifest.id,
+        manifest_digest: manifest.manifest_digest
+      });
+      return reply.code(registered.created ? 201 : 200).send({
+        manifest,
+        created: registered.created
+      });
+    } catch (error) {
+      if (error instanceof ExecutionManifestConflictError) {
+        return reply.code(409).send({ error: error.code, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/external-executions/:id/manifest", async (request, reply) => {
+    const params = request.params as { id: string };
+    if (!externalExecutions.get(params.id)) {
+      return reply.code(404).send({ error: "external_execution_not_found" });
+    }
+    const manifest = executionManifests.getByExecution(params.id);
+    if (!manifest) {
+      return reply.code(404).send({ error: "execution_manifest_not_found" });
+    }
+    return { manifest };
+  });
+
+  app.put(
+    "/external-executions/:id/manifest/outputs/:logicalName/availability",
+    async (request, reply) => {
+      const params = request.params as { id: string; logicalName: string };
+      if (!externalExecutions.get(params.id)) {
+        return reply.code(404).send({ error: "external_execution_not_found" });
+      }
+      const body = z
+        .object({
+          status: z.enum(["available", "deleted", "expired"]),
+          reason: z.string().max(1024).optional()
+        })
+        .strict()
+        .parse(request.body);
+      try {
+        return {
+          manifest: executionManifests.updateAvailability({
+            externalExecutionId: params.id,
+            logicalName: params.logicalName,
+            status: body.status,
+            reason: body.reason
+          })
+        };
+      } catch (error) {
+        return reply.code(404).send({
+          error: "execution_manifest_output_not_found",
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+  );
+
+  app.get("/runs/:id/manifest", async (request, reply) => {
+    const params = request.params as { id: string };
+    if (!runs.get(params.id)) {
+      return reply.code(404).send({ error: "run_not_found" });
+    }
+    const manifest = executionManifests.getByRun(params.id);
+    if (!manifest) {
+      return reply.code(404).send({ error: "execution_manifest_not_found" });
+    }
+    return { manifest };
   });
 
   app.post("/external-executions/:id/complete", async (request, reply) => {
@@ -617,9 +798,6 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
         message: "completion_receipt or manifest_id is required"
       })
       .parse(request.body);
-    if (body.manifest_id && body.completion_receipt === undefined) {
-      return reply.code(409).send({ error: "manifest_not_found" });
-    }
     if (body.completion_receipt !== undefined) {
       try {
         assertCanonicalSize(body.completion_receipt, 64 * 1024, "completion_receipt");
@@ -644,7 +822,10 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       });
       return { execution, run: runs.get(execution.run_id) };
     } catch (error) {
-      if (error instanceof ExternalExecutionConflictError) {
+      if (
+        error instanceof ExternalExecutionConflictError ||
+        error instanceof ExecutionManifestConflictError
+      ) {
         return reply.code(409).send({ error: error.code, message: error.message });
       }
       throw error;

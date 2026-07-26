@@ -8,6 +8,7 @@ import { ensureDirectory, getPlatformPaths } from "./platform.js";
 import { ArtifactRepository } from "./repositories/artifacts.js";
 import { ExternalExecutionRepository } from "./repositories/external-executions.js";
 import { ExternalMcpGrantRepository } from "./repositories/external-mcp-grants.js";
+import { ExecutionManifestRepository } from "./repositories/execution-manifests.js";
 import { LogRepository } from "./repositories/logs.js";
 import { MonRepository } from "./repositories/mons.js";
 import { MondeRepository } from "./repositories/mondes.js";
@@ -31,6 +32,7 @@ export async function createService() {
   const mondes = new MondeRepository(database.db);
   const externalExecutions = new ExternalExecutionRepository(database.db);
   const externalMcpGrants = new ExternalMcpGrantRepository(database.db);
+  const executionManifests = new ExecutionManifestRepository(database.db);
   const mons = new MonRepository(database.db);
   const plans = new PlanRepository(database.db);
   const processSlots = new ProcessSlotRepository(database.db);
@@ -47,6 +49,7 @@ export async function createService() {
     mondes,
     externalExecutions,
     externalMcpGrants,
+    executionManifests,
     mons,
     plans,
     processSlots,
@@ -121,6 +124,7 @@ export async function createService() {
     mondes,
     externalExecutions,
     externalMcpGrants,
+    executionManifests,
     mons,
     plans,
     runs,

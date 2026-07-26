@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 
-export const schemaVersion = 9;
+export const schemaVersion = 10;
 
 export interface MondeDatabase {
   db: DatabaseSync;
@@ -351,6 +351,47 @@ export function migrateDatabase(db: DatabaseSync): void {
 
         CREATE INDEX IF NOT EXISTS external_mcp_grants_run_idx
           ON external_mcp_grants(run_id, revoked_at);
+      `);
+    }
+
+    if (current < 10) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS execution_manifests (
+          id TEXT PRIMARY KEY,
+          external_execution_id TEXT NOT NULL UNIQUE REFERENCES external_executions(id) ON DELETE CASCADE,
+          run_id TEXT NOT NULL UNIQUE REFERENCES runs(id) ON DELETE CASCADE,
+          manifest_digest TEXT NOT NULL,
+          integration_metadata_json TEXT,
+          created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS execution_manifest_outputs (
+          manifest_id TEXT NOT NULL REFERENCES execution_manifests(id) ON DELETE CASCADE,
+          logical_name TEXT NOT NULL,
+          ref_kind TEXT NOT NULL,
+          staging_ref_json TEXT NOT NULL,
+          sha256 TEXT NOT NULL,
+          byte_size INTEGER NOT NULL,
+          media_type TEXT NOT NULL,
+          integration_metadata_json TEXT,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (manifest_id, logical_name)
+        );
+
+        CREATE TABLE IF NOT EXISTS execution_manifest_availability (
+          manifest_id TEXT NOT NULL,
+          logical_name TEXT NOT NULL,
+          status TEXT NOT NULL,
+          reason TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (manifest_id, logical_name),
+          FOREIGN KEY (manifest_id, logical_name)
+            REFERENCES execution_manifest_outputs(manifest_id, logical_name)
+            ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS execution_manifests_run_idx
+          ON execution_manifests(run_id);
       `);
     }
 

@@ -205,6 +205,7 @@ export interface AdapterDetectionDto {
   details?: string;
   notes?: string[];
   supports_isolated_runs?: boolean;
+  supports_external_mcp?: boolean;
   isolation_status?: "verified" | "verification_required" | "unsupported";
 }
 
@@ -283,4 +284,38 @@ export interface ExternalExecutionDto {
   cancellation_acknowledged_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type ExecutionManifestAvailability = "available" | "deleted" | "expired";
+
+export type ExecutionManifestStagingRef =
+  | { type: "local_path"; path: string }
+  | { type: "opaque"; value: unknown };
+
+export interface ExecutionManifestOutputDto {
+  logical_name: string;
+  staging_ref: ExecutionManifestStagingRef;
+  sha256: string;
+  byte_size: number;
+  media_type: string;
+  producer_run_id: string;
+  external_execution_key: string;
+  created_at: string;
+  integration_metadata?: unknown;
+  availability: {
+    status: ExecutionManifestAvailability;
+    reason: string | null;
+    updated_at: string;
+  };
+}
+
+export interface ExecutionManifestDto {
+  id: string;
+  external_execution_id: string;
+  run_id: string;
+  external_execution_key: string;
+  manifest_digest: string;
+  created_at: string;
+  integration_metadata?: unknown;
+  outputs: ExecutionManifestOutputDto[];
 }

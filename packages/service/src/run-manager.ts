@@ -39,6 +39,7 @@ import type { RunWorkspaceRepository } from "./repositories/run-workspaces.js";
 import type { ArtifactRepository } from "./repositories/artifacts.js";
 import type { ExternalExecutionRepository } from "./repositories/external-executions.js";
 import type { ExternalMcpGrantRepository } from "./repositories/external-mcp-grants.js";
+import type { ExecutionManifestRepository } from "./repositories/execution-manifests.js";
 import type { LogRepository } from "./repositories/logs.js";
 
 export interface RunManagerConfig {
@@ -113,6 +114,7 @@ export class RunManager {
       mondes: MondeRepository;
       externalExecutions?: ExternalExecutionRepository;
       externalMcpGrants?: ExternalMcpGrantRepository;
+      executionManifests?: ExecutionManifestRepository;
       mons: MonRepository;
       plans?: PlanRepository;
       processSlots?: ProcessSlotRepository;
@@ -732,6 +734,12 @@ export class RunManager {
     if (!this.deps.externalExecutions) {
       throw new Error("External execution repository is unavailable.");
     }
+    if (input.manifestId) {
+      if (!this.deps.executionManifests) {
+        throw new Error("Execution manifest repository is unavailable.");
+      }
+      this.deps.executionManifests.assertOwnedByExecution(input.manifestId, input.executionId);
+    }
     const execution = this.deps.externalExecutions.recordCompletion({
       id: input.executionId,
       digest: input.completionDigest,
@@ -993,6 +1001,7 @@ export class RunManager {
     for (const workspace of this.deps.runWorkspaces.listExpired(now)) {
       try {
         cleanupRunScopeFiles(workspace.scope_root, this.deps.config.dataDir);
+        this.deps.executionManifests?.markLocalOutputsExpiredByRun(workspace.run_id, now);
         this.deps.runWorkspaces.markCleaned(workspace.run_id, now);
         if (this.deps.runs.get(workspace.run_id)) {
           this.deps.events.publish(workspace.run_id, "run_scope_cleaned", {
