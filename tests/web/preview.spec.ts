@@ -57,6 +57,36 @@ test("renders an isolated authenticated operator overview", async ({ page, reque
   expect(health.db_path).toBe(path.join(testRoot, "data", "monde", "monde.sqlite"));
   expect(health.machine_name).toBeTruthy();
 
+  const threadSeed = await request.post(`/api/mondes/${mondeId}/threads`, {
+    headers,
+    data: {
+      mon_id: "frontend",
+      title: "Preview conversation"
+    }
+  });
+  expect(threadSeed.status()).toBe(201);
+  const thread = (await threadSeed.json()) as { thread: { id: string } };
+
+  const threadClose = await request.post(`/api/runs/${thread.thread.id}/close`, {
+    headers,
+    data: { close_reason: "user_closed_widget" }
+  });
+  expect(threadClose.status()).toBe(200);
+  expect((await threadClose.json()) as { run?: { outcome_state?: string } }).toMatchObject({
+    run: { outcome_state: "succeeded" }
+  });
+
+  const artifactSeed = await request.post("/api/artifacts", {
+    headers,
+    data: {
+      run_id: thread.thread.id,
+      type: "note",
+      title: "Conversation note",
+      summary: "Readable evidence for the clean thread close."
+    }
+  });
+  expect(artifactSeed.status()).toBe(200);
+
   page.on("console", (message) => {
     if (message.type() === "error") {
       consoleErrors.push(message.text());
@@ -90,6 +120,18 @@ test("renders an isolated authenticated operator overview", async ({ page, reque
   const screenshotPath = testInfo.outputPath("monde-overview.png");
   await page.screenshot({ path: screenshotPath, fullPage: true });
   await testInfo.attach("authenticated-overview", { path: screenshotPath, contentType: "image/png" });
+
+  await page.getByRole("button", { name: "Runs", exact: true }).click();
+  await page.locator(".run-row").filter({ hasText: "Preview conversation" }).click();
+  await expect(page.locator(".run-summary-strip .badge").filter({ hasText: /^thread$/ })).toHaveText("thread");
+  await expect(page.getByText("Conversation closed cleanly.", { exact: false })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Mark stopped" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Approve completed" })).toHaveCount(0);
+
+  await page.getByRole("button", { name: /^Evidence/ }).click();
+  await expect(page.getByText("Conversation completed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Conversation note", { exact: true })).toBeVisible();
+  await expect(page.getByText("hitl thread closed", { exact: true })).toBeVisible();
 
   expect(consoleErrors).toEqual([]);
 });

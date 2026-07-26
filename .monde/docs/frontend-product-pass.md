@@ -62,6 +62,8 @@ through the service while keeping the current local machine first.
 - Multiple chat widgets can stay expanded.
 - Thread order is stable in the rail; server refreshes update items in place
   rather than reordering by `updated_at`.
+- A clean server-backed thread close is assumed successful when no runtime
+  error or timeout remains unresolved.
 
 ## Run Review Surface
 
@@ -77,8 +79,13 @@ Run Review should make these fields obvious:
 - terminal/output stream
 - logs
 - artifacts and diff evidence
+- human-readable typed log messages with expandable payload details
 - scope snapshot
 - review summary and notes
+
+Compact run-kind badges use lowercase `thread` and `one-shot`. Closed clean
+threads show no outcome actions. Closed threads with an unresolved runtime
+error may be accepted or marked failed, but are not offered `Mark stopped`.
 
 ## Plan Evidence Surface
 

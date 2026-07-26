@@ -353,10 +353,7 @@ export function App() {
       authFetch<{ events: RunEvent[] }>(`/api/runs/${runId}/events/history`),
       authFetch<{ logs: LogEvent[] }>(`/api/logs?run_id=${encodeURIComponent(runId)}`),
       authFetch<{ artifacts: Artifact[] }>(`/api/artifacts?run_id=${encodeURIComponent(runId)}`),
-      authFetch<Record<string, unknown>>(`/api/tools/runtime_scope`, {
-        method: "POST",
-        body: JSON.stringify({ run_id: runId })
-      }).catch(() => null)
+      authFetch<Record<string, unknown>>(`/api/runs/${runId}/runtime-scope`).catch(() => null)
     ]);
     setEvents(history.events);
     setLogs(logResponse.logs);

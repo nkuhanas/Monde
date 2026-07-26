@@ -11,6 +11,7 @@ import {
   outcomeTone,
   renderRunTranscript,
   runAcceptsInput,
+  runNeedsReview,
   runStateLabel,
   runVisualState,
   statusTone
@@ -53,7 +54,7 @@ export function RunDetail(props: RunDetailProps) {
   const { run } = props;
   const acceptsInput = runAcceptsInput(run);
   const reviewed = typeof run.result?.reviewed_at === "string";
-  const processUnknown = run.status === "finished" && run.outcome === "unknown";
+  const needsReview = runNeedsReview(run);
   const [activeDetailTab, setActiveDetailTab] = useState<RunDetailTab>("overview");
 
   useEffect(() => setActiveDetailTab("overview"), [run.id]);
@@ -87,7 +88,7 @@ export function RunDetail(props: RunDetailProps) {
           </header>
 
           <div className="run-summary-strip">
-            <Badge>{run.interaction_mode === "hitl_thread" ? "Thread" : "One-shot"}</Badge>
+            <Badge>{run.interaction_mode === "hitl_thread" ? "thread" : "one-shot"}</Badge>
             <Badge>{threadRuntimeLabel(run.runtime_state)}</Badge>
             {run.outcome !== "unknown" ? <Badge tone={outcomeTone(run.outcome)}>{run.outcome}</Badge> : null}
             <Badge>{String(run.execution?.runner_type ?? run.execution?.runner ?? "runner unknown")}</Badge>
@@ -114,7 +115,7 @@ export function RunDetail(props: RunDetailProps) {
       <div className="run-detail-content" data-detail-tab={activeDetailTab}>
         <div className="run-detail-inner">
           {activeDetailTab === "overview" ? (
-            <OverviewTab props={props} reviewed={reviewed} processUnknown={processUnknown} />
+            <OverviewTab props={props} reviewed={reviewed} needsReview={needsReview} />
           ) : null}
           {activeDetailTab === "output" ? <OutputTab props={props} acceptsInput={acceptsInput} /> : null}
           {activeDetailTab === "changes" ? <ChangesTab run={run} artifacts={props.artifacts} artifactDetails={props.artifactDetails} /> : null}
@@ -126,18 +127,24 @@ export function RunDetail(props: RunDetailProps) {
   );
 }
 
-function OverviewTab({ props, reviewed, processUnknown }: { props: RunDetailProps; reviewed: boolean; processUnknown: boolean }) {
+function OverviewTab({ props, reviewed, needsReview }: { props: RunDetailProps; reviewed: boolean; needsReview: boolean }) {
   const { run } = props;
+  const isThread = run.interaction_mode === "hitl_thread";
+  const cleanThreadClose =
+    isThread &&
+    run.status === "finished" &&
+    run.outcome_state === "succeeded" &&
+    run.close_reason === "user_closed_widget";
   return (
     <section className="run-detail-page run-overview-page">
       <div className="run-overview">
         <div className="run-overview-main">
-          {run.status === "finished" && !reviewed ? (
+          {needsReview ? (
             <section className="review-decision operator-review">
               <div className="review-decision-copy">
                 <p className="eyebrow">Operator review</p>
-                <h4>{processUnknown ? "This run needs an outcome" : "Confirm this run's outcome"}</h4>
-                <p>{processUnknown ? "The process exited, but its semantic result has not been reviewed." : `The recorded outcome is ${run.outcome}.`}</p>
+                <h4>{isThread ? "This thread closed with an unresolved error" : "This run needs an outcome"}</h4>
+                <p>{isThread ? "The conversation had no task-level goal, but Monde still had an unresolved runtime error when it closed." : "The process exited, but its semantic result has not been reviewed."}</p>
               </div>
               <div className="review-decision-fields">
                 <label>
@@ -152,23 +159,27 @@ function OverviewTab({ props, reviewed, processUnknown }: { props: RunDetailProp
               <div className="review-form-actions">
                 <div className="review-secondary-actions">
                   <button className="run-failure-action" type="button" onClick={() => props.onReview("failed")}>Mark failed</button>
-                  <button type="button" onClick={() => props.onReview("stopped")}>Mark stopped</button>
+                  {!isThread ? <button type="button" onClick={() => props.onReview("stopped")}>Mark stopped</button> : null}
                 </div>
-                <button className="run-primary-action" type="button" onClick={() => props.onReview("completed")}>Approve completed</button>
+                <button className="run-primary-action" type="button" onClick={() => props.onReview("completed")}>{isThread ? "Accept conversation" : "Approve completed"}</button>
               </div>
             </section>
           ) : reviewed ? (
             <div className="review-notice review-notice-reviewed">
               Reviewed by {String(run.result?.reviewed_by ?? "operator")} at {formatDate(String(run.result?.reviewed_at))}.
             </div>
+          ) : cleanThreadClose ? (
+            <div className="review-notice review-notice-reviewed">
+              Conversation closed cleanly. No unresolved Monde runtime error remained, so no operator outcome review is required.
+            </div>
           ) : null}
 
           <section className="intent-summary requested-work">
             <div className="section-head compact-head">
-              <div><p className="eyebrow">Requested work</p><h4>{run.intent.title}</h4></div>
+              <div><p className="eyebrow">{isThread ? "Conversation" : "Requested work"}</p><h4>{run.intent.title}</h4></div>
               <Badge>{String(run.origin.type)}</Badge>
             </div>
-            <pre className="requested-work-body">{run.intent.prompt}</pre>
+            <pre className="requested-work-body">{isThread ? `Open-ended conversation with ${monIdDisplayName(run.mon_id)}. Threads have no task-level success criterion.` : run.intent.prompt}</pre>
           </section>
 
           {run.result && Object.keys(run.result).length ? (
@@ -229,12 +240,16 @@ function EvidenceTab({ props }: { props: RunDetailProps }) {
   const { run } = props;
   return (
     <section className="run-detail-page">
-      <div className="evidence-grid">
-        <EvidencePanel title={`Artifacts (${props.artifacts.length})`} content={props.artifacts.length ? props.artifacts.map((artifact) => `${artifact.type} · ${artifact.path_status}\n${artifact.title}\n${artifact.path ?? "no path"}`).join("\n\n") : "No artifacts."} />
-        <EvidencePanel title={`Logs (${props.logs.length})`} content={props.logs.length ? props.logs.map((log) => `${log.created_at} ${log.event_type} ${JSON.stringify(log.payload)}`).join("\n") : "No logs."} />
-        <EvidencePanel title="Warnings" content={run.warnings?.length ? run.warnings.join("\n") : "No warnings."} />
-        <EvidencePanel title="Result" content={JSON.stringify(run.result ?? {}, null, 2)} />
+      <div className="evidence-status-grid">
+        <section className={run.warnings?.length ? "evidence-status-card evidence-status-warning" : "evidence-status-card evidence-status-ok"}>
+          <span className="eyebrow">Warnings</span>
+          <strong>{run.warnings?.length ? `${run.warnings.length} warning${run.warnings.length === 1 ? "" : "s"}` : "No warnings observed"}</strong>
+          {run.warnings?.length ? <ul>{run.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : <p>Monde did not attach any run-level warnings.</p>}
+        </section>
+        <ResultEvidence run={run} />
       </div>
+      <ArtifactEvidence artifacts={props.artifacts} />
+      <LogEvidence logs={props.logs} />
       <details className="artifact-register-panel">
         <summary>Add artifact</summary>
         <form className="artifact-create" onSubmit={props.onRegisterArtifact}>
@@ -250,13 +265,133 @@ function EvidenceTab({ props }: { props: RunDetailProps }) {
   );
 }
 
+function ArtifactEvidence({ artifacts }: { artifacts: ArtifactDto[] }) {
+  return (
+    <section className="evidence-collection">
+      <div className="evidence-collection-head">
+        <div><span className="eyebrow">Artifacts</span><h4>{artifacts.length ? `${artifacts.length} registered output${artifacts.length === 1 ? "" : "s"}` : "No registered outputs"}</h4></div>
+        <Badge>{artifacts.length}</Badge>
+      </div>
+      {artifacts.length ? (
+        <div className="artifact-evidence-list">
+          {artifacts.map((artifact) => (
+            <article className="artifact-evidence-row" key={artifact.id}>
+              <div className="artifact-evidence-title">
+                <strong>{artifact.title}</strong>
+                <div>
+                  <Badge>{humanizeEvidenceLabel(artifact.type)}</Badge>
+                  <Badge tone={artifact.path_status === "exists" ? "green" : artifact.path_status === "missing" ? "amber" : "default"}>{humanizeEvidenceLabel(artifact.path_status)}</Badge>
+                </div>
+              </div>
+              {artifact.summary ? <p>{artifact.summary}</p> : null}
+              <code title={artifact.path ?? undefined}>{artifact.path ?? "No path recorded"}</code>
+            </article>
+          ))}
+        </div>
+      ) : <p className="evidence-empty-copy">This run did not register any artifacts.</p>}
+    </section>
+  );
+}
+
+function LogEvidence({ logs }: { logs: LogEventDto[] }) {
+  return (
+    <section className="evidence-collection">
+      <div className="evidence-collection-head">
+        <div><span className="eyebrow">Activity log</span><h4>{logs.length ? `${logs.length} recorded event${logs.length === 1 ? "" : "s"}` : "No recorded events"}</h4></div>
+        <Badge>{logs.length}</Badge>
+      </div>
+      {logs.length ? (
+        <div className="log-evidence-list">
+          {logs.map((log) => {
+            const details = logDetailEntries(log);
+            return (
+              <article className="log-evidence-row" key={log.id}>
+                <div className="log-evidence-meta">
+                  <Badge tone={logTone(log.event_type)}>{humanizeEvidenceLabel(log.event_type)}</Badge>
+                  <time dateTime={log.created_at}>{formatDate(log.created_at)}</time>
+                </div>
+                <p>{logSummary(log)}</p>
+                {details.length ? (
+                  <details className="log-evidence-details">
+                    <summary>Details</summary>
+                    <dl>{details.map(([key, value]) => <div key={key}><dt>{humanizeEvidenceLabel(key)}</dt><dd>{formatEvidenceValue(value)}</dd></div>)}</dl>
+                  </details>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      ) : <p className="evidence-empty-copy">This run did not write any typed log events.</p>}
+    </section>
+  );
+}
+
+function ResultEvidence({ run }: { run: RunDto }) {
+  const entries = Object.entries(run.result ?? {}).filter(([, value]) => value !== undefined && value !== null && value !== "");
+  const cleanThreadClose =
+    run.interaction_mode === "hitl_thread" &&
+    run.outcome_state === "succeeded" &&
+    run.close_reason === "user_closed_widget";
+  return (
+    <section className={run.outcome_state === "failed" ? "evidence-status-card evidence-status-warning" : "evidence-status-card evidence-status-ok"}>
+      <span className="eyebrow">Result</span>
+      <strong>{cleanThreadClose ? "Conversation completed" : humanizeEvidenceLabel(run.outcome_state === "unknown" ? run.outcome : run.outcome_state)}</strong>
+      {entries.length ? (
+        <dl className="result-evidence-list">{entries.map(([key, value]) => <div key={key}><dt>{humanizeEvidenceLabel(key)}</dt><dd>{formatEvidenceValue(value)}</dd></div>)}</dl>
+      ) : (
+        <p>{cleanThreadClose ? "Closed without an unresolved runtime error; no review record was required." : "No result summary or review notes were recorded."}</p>
+      )}
+    </section>
+  );
+}
+
+const logSummaryKeys = ["summary", "message", "content", "error", "detail", "reason", "type"] as const;
+
+function logSummary(log: LogEventDto): string {
+  for (const key of logSummaryKeys) {
+    const value = log.payload[key];
+    if (typeof value === "string" && value.trim()) {
+      return key === "type" ? humanizeEvidenceLabel(value) : value.trim();
+    }
+  }
+  return "No human-readable description was recorded.";
+}
+
+function logDetailEntries(log: LogEventDto): Array<[string, unknown]> {
+  return Object.entries(log.payload).filter(([key, value]) =>
+    key !== "event_type" &&
+    !logSummaryKeys.includes(key as (typeof logSummaryKeys)[number]) &&
+    value !== undefined &&
+    value !== null &&
+    value !== ""
+  );
+}
+
+function logTone(eventType: string): "default" | "green" | "amber" | "red" | "blue" {
+  if (eventType === "error") return "red";
+  if (eventType === "warning_added") return "amber";
+  if (eventType === "milestone" || eventType === "review") return "green";
+  if (eventType === "decision" || eventType === "audit") return "blue";
+  return "default";
+}
+
+function humanizeEvidenceLabel(value: string): string {
+  return value.replaceAll("_", " ").replaceAll("-", " ").trim().toLowerCase() || "not recorded";
+}
+
+function formatEvidenceValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value, null, 2) ?? String(value);
+}
+
 function ConfigurationTab({ props, acceptsInput }: { props: RunDetailProps; acceptsInput: boolean }) {
   const { run } = props;
   return (
     <section className="run-detail-page">
       <div className="review-state">
         <MetadataGroup title="Run Kind">
-          <Badge>{run.interaction_mode === "hitl_thread" ? "HITL Thread" : "One-shot"}</Badge>
+          <Badge>{run.interaction_mode === "hitl_thread" ? "thread" : "one-shot"}</Badge>
           <Badge>{threadRuntimeLabel(run.runtime_state)}</Badge>
           <Badge tone={run.outcome_state === "succeeded" ? "green" : run.outcome_state === "failed" ? "red" : "default"}>{run.outcome_state}</Badge>
           {run.close_reason ? <Badge>{run.close_reason}</Badge> : null}

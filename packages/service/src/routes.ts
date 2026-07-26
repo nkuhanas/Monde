@@ -709,6 +709,15 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     return { run };
   });
 
+  app.get("/runs/:id/runtime-scope", async (request, reply) => {
+    const params = request.params as { id: string };
+    if (!runs.get(params.id)) {
+      return reply.code(404).send({ error: "run_not_found" });
+    }
+
+    return tools.runtimeScope(params.id);
+  });
+
   app.post("/mondes/:mondeId/integrations/:integrationId/runs", async (request, reply) => {
     const params = z
       .object({

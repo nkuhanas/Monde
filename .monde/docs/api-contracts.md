@@ -94,13 +94,24 @@ POST /cron-schedules
 PATCH /cron-schedules/:id
 DELETE /cron-schedules/:id
 POST /artifacts
+GET /runs/:id/runtime-scope
 POST /tools/runtime_scope
 ```
+
+The operator UI reads run scope through `GET /runs/:id/runtime-scope`. The
+`POST /tools/runtime_scope` form remains a run-token-scoped harness/MCP
+capability and is intentionally not a browser API.
 
 `/runs/:id/close` has two relevant surfaces:
 
 - one-shot run close/review with an explicit `outcome`
 - HITL thread close with a `close_reason`
+
+For `close_reason = user_closed_widget`, the service records a clean HITL
+thread as `completed/succeeded` when its final execution metadata has no
+unresolved chat error or timeout. A thread with an unresolved error remains
+`unknown` for optional operator review. Earlier recovered turn errors stay in
+the event history but do not force review.
 
 ## Run Execution Metadata
 

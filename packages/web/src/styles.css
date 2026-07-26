@@ -5034,6 +5034,219 @@ textarea {
   gap: 10px;
 }
 
+.evidence-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.evidence-status-card,
+.evidence-collection {
+  min-width: 0;
+  border: 1px solid var(--runs-border);
+  border-radius: 10px;
+  background: var(--monde-card-solid);
+}
+
+.evidence-status-card {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  border-left: 4px solid #79c9a9;
+  padding: 13px 14px;
+}
+
+.evidence-status-card.evidence-status-warning {
+  border-left-color: var(--runs-warning-accent);
+}
+
+.evidence-status-card strong {
+  color: var(--runs-text);
+  font-size: 14px;
+}
+
+.evidence-status-card p,
+.evidence-status-card li,
+.evidence-empty-copy {
+  color: var(--runs-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.evidence-status-card ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.result-evidence-list,
+.log-evidence-details dl {
+  display: grid;
+  gap: 5px;
+  margin: 2px 0 0;
+}
+
+.result-evidence-list > div,
+.log-evidence-details dl > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(90px, 0.3fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.result-evidence-list dt,
+.log-evidence-details dt {
+  color: var(--runs-text-tertiary);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.result-evidence-list dd,
+.log-evidence-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--runs-text-muted);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.evidence-collection {
+  overflow: hidden;
+}
+
+.evidence-collection-head {
+  min-height: 58px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid var(--runs-border);
+  padding: 10px 13px;
+}
+
+.evidence-collection-head h4 {
+  margin-top: 2px;
+  color: var(--runs-text);
+  font-size: 14px;
+}
+
+.artifact-evidence-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.artifact-evidence-row {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  border: 1px solid var(--runs-border);
+  border-radius: 9px;
+  background: var(--runs-surface-muted);
+  padding: 11px;
+}
+
+.artifact-evidence-title {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.artifact-evidence-title strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--runs-text);
+  font-size: 13px;
+}
+
+.artifact-evidence-title > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.artifact-evidence-row p {
+  color: var(--runs-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.artifact-evidence-row code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #44566f;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.log-evidence-list {
+  display: grid;
+}
+
+.log-evidence-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(170px, 0.3fr) minmax(0, 1fr);
+  gap: 8px 16px;
+  align-items: start;
+  padding: 11px 13px;
+}
+
+.log-evidence-row + .log-evidence-row {
+  border-top: 1px solid var(--runs-border);
+}
+
+.log-evidence-meta {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.log-evidence-meta time {
+  color: var(--runs-text-tertiary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.log-evidence-row > p {
+  color: var(--runs-text);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.log-evidence-details {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.log-evidence-details summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--runs-action);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.log-evidence-details dl {
+  margin-top: 8px;
+  border-radius: 7px;
+  background: var(--runs-surface-muted);
+  padding: 8px;
+}
+
+.evidence-empty-copy {
+  padding: 14px;
+}
+
 .evidence-panel {
   min-width: 0;
   border: 1px solid var(--runs-border);
@@ -5238,8 +5451,14 @@ pre {
   .artifact-row,
   .artifact-create,
   .review-head,
-  .evidence-grid {
+  .evidence-grid,
+  .evidence-status-grid,
+  .log-evidence-row {
     grid-template-columns: 1fr;
+  }
+
+  .log-evidence-details {
+    grid-column: 1;
   }
 
   .review-decision,

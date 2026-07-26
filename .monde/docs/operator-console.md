@@ -143,6 +143,9 @@ Closing policy:
 - Draft threads close immediately because they are local-only.
 - Server-backed threads show the reusable confirmation overlay.
 - Closing a HITL thread records `close_reason = user_closed_widget`.
+- A close with no unresolved runtime error or timeout records
+  `outcome_state = succeeded` and requires no operator review.
+- A close with an unresolved runtime error remains reviewable as `unknown`.
 
 ## Confirmation Overlay
 
@@ -180,6 +183,16 @@ Run review records:
 
 The UI should keep outcome review explicit where it applies and should not
 mislabel downstream domain validation as Monde run review.
+
+Closed threads are not offered `Mark stopped`: they are already closed and
+have no task-level stop outcome to adjudicate. An unresolved-error thread may
+be marked failed or accepted as a conversation. Clean threads show an
+informational success notice instead of review controls.
+
+Evidence uses structured artifact rows and typed log entries. Primary log
+messages are readable without parsing JSON; secondary payload fields remain
+available in an expandable details section. Empty result objects render as an
+explanation rather than `{}`.
 
 ## Write Evidence
 
