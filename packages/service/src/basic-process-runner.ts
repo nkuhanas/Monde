@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import path from "node:path";
 import { basicProcessAdapter, getHarnessAdapter } from "@monde/adapters";
 import type { RunScopeSnapshot } from "./scope.js";
 
@@ -50,6 +51,11 @@ export class BasicProcessRunner implements HarnessRunner {
       model: input.scope.model,
       serviceAddr: input.serviceAddr,
       mcpAddr: input.mcpAddr,
+      workspaceMode: input.scope.workspace_mode,
+      scratchPath: input.scope.scratch_path,
+      contextSnapshotPath: input.scope.context_snapshot_path,
+      readMounts: input.scope.read_mounts,
+      runScopesRoot: input.scope.scope_root ? path.dirname(input.scope.scope_root) : undefined,
       scopeSnapshot: input.scope as unknown as Record<string, unknown>
     });
     const stdoutFilter = command.outputMode === "codex-json-filtered" ? new CodexJsonOutputFilter() : undefined;
@@ -64,6 +70,9 @@ export class BasicProcessRunner implements HarnessRunner {
         MONDE_MON_ID: input.scope.mon_id,
         MONDE_MON_ROOT: input.scope.mon_root,
         MONDE_WORK_ROOT: input.scope.work_root,
+        MONDE_WORKSPACE_MODE: input.scope.workspace_mode,
+        ...(input.scope.scratch_path ? { MONDE_RUN_SCRATCH: input.scope.scratch_path } : {}),
+        ...(input.scope.context_snapshot_path ? { MONDE_ACTOR_CONTEXT: input.scope.context_snapshot_path } : {}),
         MONDE_DOCS_ROOT: input.scope.docs_root,
         MONDE_HARNESS_ADAPTER: adapter.id,
         MONDE_RUNNER_TYPE: runnerType,

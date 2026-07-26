@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 
-export const schemaVersion = 6;
+export const schemaVersion = 7;
 
 export interface MondeDatabase {
   db: DatabaseSync;
@@ -264,6 +264,28 @@ export function migrateDatabase(db: DatabaseSync): void {
 
         CREATE INDEX IF NOT EXISTS process_slots_mon_idx
           ON process_slots(monde_id, mon_id, reserved_at);
+      `);
+    }
+
+    if (current < 7) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS run_workspaces (
+          run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+          workspace_mode TEXT NOT NULL,
+          scope_root TEXT NOT NULL,
+          context_path TEXT,
+          scratch_path TEXT,
+          state TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          sealed_at TEXT,
+          expires_at TEXT,
+          cleaned_at TEXT,
+          cleanup_attempts INTEGER NOT NULL DEFAULT 0,
+          cleanup_error TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS run_workspaces_expiry_idx
+          ON run_workspaces(state, expires_at);
       `);
     }
 

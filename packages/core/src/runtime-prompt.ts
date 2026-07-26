@@ -21,6 +21,12 @@ export type RuntimePromptScope = Record<string, unknown> & {
   work_root?: unknown;
   monde_root?: unknown;
   docs_root?: unknown;
+  workspace_mode?: unknown;
+  execution_root?: unknown;
+  scratch_path?: unknown;
+  context_snapshot_path?: unknown;
+  actor_context_files?: unknown;
+  read_mounts?: unknown;
   capabilities?: unknown;
   mon_json?: unknown;
   monde_json?: unknown;
@@ -45,6 +51,14 @@ export function buildRuntimePrompt(
   const workRoot = stringValue(scopeSnapshot.work_root, mon && "work_root" in mon ? mon.work_root : undefined);
   const mondeRoot = stringValue(scopeSnapshot.monde_root, monde && "root" in monde ? monde.root : undefined);
   const docsRoot = stringValue(scopeSnapshot.docs_root, monde && "docs" in monde ? monde.docs : undefined);
+  const workspaceMode = scopeSnapshot.workspace_mode === "isolated" ? "isolated" : "shared";
+  const executionRoot = stringValue(scopeSnapshot.execution_root, workRoot);
+  const scratchPath = stringValue(scopeSnapshot.scratch_path);
+  const contextSnapshotPath = stringValue(scopeSnapshot.context_snapshot_path);
+  const actorContextFiles = Array.isArray(scopeSnapshot.actor_context_files)
+    ? scopeSnapshot.actor_context_files.filter(isRecord)
+    : [];
+  const readMounts = Array.isArray(scopeSnapshot.read_mounts) ? scopeSnapshot.read_mounts.map(String) : [];
   const canWrite = run.execution?.can_write === true;
   const sandboxMode = typeof run.execution?.sandbox_mode === "string" ? run.execution.sandbox_mode : "unknown";
   const writeScope = typeof run.execution?.write_scope === "string" ? run.execution.write_scope : "not advertised";
@@ -57,11 +71,11 @@ export function buildRuntimePrompt(
   return [
     `You are the ${role} mon in the current Monde named ${mondeName}.`,
     "",
-    "Your identity root is:",
-    `  ${monRoot ?? "(unknown)"}`,
+    workspaceMode === "isolated" ? "Your immutable actor-context snapshot is:" : "Your identity root is:",
+    `  ${workspaceMode === "isolated" ? contextSnapshotPath ?? "(none configured)" : monRoot ?? "(unknown)"}`,
     "",
-    "Your project working scope is:",
-    `  ${workRoot ?? "(unknown)"}`,
+    workspaceMode === "isolated" ? "Your writable run scratch workspace is:" : "Your project working scope is:",
+    `  ${executionRoot ?? "(unknown)"}`,
     "",
     "The Monde root is:",
     `  ${mondeRoot ?? "(unknown)"}`,
@@ -82,9 +96,12 @@ export function buildRuntimePrompt(
     `  intent.prompt = ${run.intent.prompt}`,
     "",
     "Scope rules:",
-    "  Treat mon_root as identity/configuration for this mon.",
-    "  Work primarily inside work_root.",
-    "  Do not edit outside work_root unless the operator explicitly authorizes it.",
+    `  workspace_mode = ${workspaceMode}`,
+    workspaceMode === "isolated"
+      ? "  The source Mon and work roots are not readable unless listed as explicit read mounts."
+      : "  Treat mon_root as identity/configuration and work primarily inside work_root.",
+    scratchPath ? `  scratch_path = ${scratchPath}` : "  scratch_path = shared work root",
+    readMounts.length ? `  explicit_read_mounts = ${readMounts.join(", ")}` : "  explicit_read_mounts = none",
     "  The active scope snapshot is stable for this run; stale_scope is a warning, not an automatic scope change.",
     "",
     "Write capability:",
@@ -110,6 +127,17 @@ export function buildRuntimePrompt(
     "Register important produced files as artifacts.",
     "A clean process exit does not imply semantic success; outcome may remain unknown until reviewed.",
     capabilities.length ? `Advisory capabilities declared by this mon: ${capabilities.join(", ")}` : "No advisory capabilities are declared by this mon."
+    ,
+    ...(actorContextFiles.length
+      ? [
+          "",
+          "Immutable actor context:",
+          ...actorContextFiles.flatMap((file) => [
+            `--- ${String(file.logical_path ?? file.configured_path ?? "context")} sha256=${String(file.sha256 ?? "unknown")} ---`,
+            String(file.content ?? "")
+          ])
+        ]
+      : [])
   ].join("\n");
 }
 

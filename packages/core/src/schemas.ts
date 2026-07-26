@@ -20,6 +20,24 @@ export const MondeConfigSchema = z.object({
 
 export type MondeConfig = z.infer<typeof MondeConfigSchema>;
 
+export const ActorContextEntrySchema = z.object({
+  root: z.enum(["mon", "work"]),
+  path: z.string().min(1)
+});
+
+export const ReadMountSchema = z.object({
+  root: z.enum(["mon", "work"]),
+  path: z.string().min(1)
+});
+
+export const RunWorkspacePolicySchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("shared") }),
+  z.object({
+    mode: z.literal("isolated"),
+    recovery_window_seconds: z.number().int().positive().max(604800).default(86400)
+  })
+]);
+
 export const MonConfigSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -37,9 +55,20 @@ export const MonConfigSchema = z.object({
   work_root: z.string().default(".."),
   allow_external_work_root: z.boolean().optional(),
   max_active_runs: z.number().int().min(1).max(32).default(1),
+  run_workspace: RunWorkspacePolicySchema.default({ mode: "shared" }),
+  actor_context: z.array(ActorContextEntrySchema).max(32).default([]),
+  read_mounts: z.array(ReadMountSchema).max(16).default([]),
   capabilities: z.array(z.string()).default([]),
   created_at: z.string(),
   created_under_monde_id: z.string().optional()
+}).superRefine((config, context) => {
+  if (config.max_active_runs > 1 && config.run_workspace.mode !== "isolated") {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["run_workspace"],
+      message: "max_active_runs greater than 1 requires run_workspace.mode=isolated"
+    });
+  }
 });
 
 export type MonConfig = z.infer<typeof MonConfigSchema>;

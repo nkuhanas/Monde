@@ -4,7 +4,7 @@ import { initMonde } from "./commands/init.js";
 import { createMon } from "./commands/mon.js";
 import { messageMon } from "./commands/message.js";
 import { listArtifacts, registerArtifact, showArtifact } from "./commands/artifact.js";
-import { listAdapters, inspectAdapter } from "./commands/adapter.js";
+import { listAdapters, inspectAdapter, verifyAdapterIsolation } from "./commands/adapter.js";
 import { backupCreate, backupInfo, backupList } from "./commands/backup.js";
 import { doctor, repair } from "./commands/doctor.js";
 import { bridgeMcp } from "./commands/mcp.js";
@@ -134,6 +134,11 @@ artifact
 const adapter = program.command("adapter").description("Inspect harness adapters");
 adapter.command("list").action(listAdapters);
 adapter.command("inspect").argument("<adapter-id>").action(inspectAdapter);
+adapter
+  .command("verify-isolation")
+  .argument("<adapter-id>")
+  .description("run local isolation probes and attest the current adapter runtime")
+  .action(verifyAdapterIsolation);
 
 const mcp = program.command("mcp").description("Run MCP bridge helpers");
 mcp

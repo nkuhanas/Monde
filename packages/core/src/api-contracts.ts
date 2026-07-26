@@ -43,6 +43,9 @@ export interface MonDto {
   harness_defaults?: Record<string, { sandbox_mode?: string }>;
   allow_external_work_root?: boolean;
   max_active_runs?: number;
+  run_workspace?: { mode: "shared" } | { mode: "isolated"; recovery_window_seconds: number };
+  actor_context?: Array<{ root: "mon" | "work"; path: string }>;
+  read_mounts?: Array<{ root: "mon" | "work"; path: string }>;
   capabilities?: string[];
   created_at?: string;
   updated_at?: string;
@@ -200,6 +203,8 @@ export interface AdapterDetectionDto {
   reason?: string;
   details?: string;
   notes?: string[];
+  supports_isolated_runs?: boolean;
+  isolation_status?: "verified" | "verification_required" | "unsupported";
 }
 
 export interface AdapterInfoDto {

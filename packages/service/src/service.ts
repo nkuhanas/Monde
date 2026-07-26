@@ -13,6 +13,7 @@ import { PlanRepository } from "./repositories/plans.js";
 import { ProcessSlotRepository } from "./repositories/process-slots.js";
 import { RunEventRepository } from "./repositories/run-events.js";
 import { RunRepository } from "./repositories/runs.js";
+import { RunWorkspaceRepository } from "./repositories/run-workspaces.js";
 import { RunEventBus } from "./run-events.js";
 import { RunManager } from "./run-manager.js";
 import { registerMcpRoutes, registerRoutes } from "./routes.js";
@@ -31,6 +32,7 @@ export async function createService() {
   const processSlots = new ProcessSlotRepository(database.db);
   const runs = new RunRepository(database.db);
   const runEvents = new RunEventRepository(database.db);
+  const runWorkspaces = new RunWorkspaceRepository(database.db);
   const eventBus = new RunEventBus(runEvents);
   const logs = new LogRepository(database.db);
   const artifacts = new ArtifactRepository(database.db);
@@ -43,15 +45,20 @@ export async function createService() {
     plans,
     processSlots,
     runs,
+    runWorkspaces,
     logs,
     artifacts,
     events: eventBus,
     config: {
       serviceAddr,
-      mcpAddr
+      mcpAddr,
+      dataDir: paths.dataDir
     }
   });
   runManager.markLostRunsOnStartup();
+  runManager.sweepExpiredRunScopes();
+  const runScopeSweep = setInterval(() => runManager.sweepExpiredRunScopes(), 60_000);
+  runScopeSweep.unref();
   const tools = new ToolHandlers({ runs, plans, logs, artifacts });
   const allowedOrigins = new Set([
     `http://${config.host}:${config.webPort}`,
@@ -138,6 +145,7 @@ export async function createService() {
       );
     },
     async stop() {
+      clearInterval(runScopeSweep);
       await app.close();
       await mcpApp.close();
       database.close();

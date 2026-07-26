@@ -1,8 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildRuntimePrompt } from "@monde/core";
+import { buildRuntimePrompt, getMondePlatformPaths } from "@monde/core";
 import type { RunRecord } from "@monde/core";
 
 export interface HarnessAdapterContext {
@@ -18,6 +20,11 @@ export interface HarnessAdapterContext {
   model?: string | null;
   serviceAddr: string;
   mcpAddr: string;
+  workspaceMode?: "shared" | "isolated";
+  scratchPath?: string;
+  contextSnapshotPath?: string;
+  readMounts?: string[];
+  runScopesRoot?: string;
 }
 
 export interface HarnessLaunchCommand {
@@ -51,6 +58,8 @@ export interface HarnessDetection {
   reason?: string;
   details?: string;
   notes?: string[];
+  supports_isolated_runs?: boolean;
+  isolation_status?: "verified" | "verification_required" | "unsupported";
 }
 
 export interface HarnessAdapter {
@@ -74,6 +83,9 @@ function baseEnv(context: HarnessAdapterContext): Record<string, string> {
     MONDE_MCP_ADDR: context.mcpAddr,
     MONDE_MON_ROOT: context.monRoot,
     MONDE_WORK_ROOT: context.workRoot,
+    MONDE_WORKSPACE_MODE: context.workspaceMode ?? "shared",
+    ...(context.scratchPath ? { MONDE_RUN_SCRATCH: context.scratchPath } : {}),
+    ...(context.contextSnapshotPath ? { MONDE_ACTOR_CONTEXT: context.contextSnapshotPath } : {}),
     MONDE_RUNTIME_PROMPT: runtimePrompt,
     MONDE_MCP_CONFIG: JSON.stringify(stdioMcpConfig(context))
   };
@@ -95,6 +107,8 @@ export const basicProcessAdapter: HarnessAdapter = {
       input_mode: "open",
       output_mode: "terminal",
       supported_sandbox_modes: ["process-permissions"],
+      supports_isolated_runs: false,
+      isolation_status: "unsupported",
       default_sandbox_mode: "process-permissions",
       command: process.platform === "win32" ? "cmd.exe" : process.env.SHELL || "/bin/sh"
     };
@@ -141,8 +155,10 @@ export const codexAdapter: HarnessAdapter = {
       interaction_mode: "single-shot",
       input_mode: "closed",
       output_mode: "json-events",
-      supported_sandbox_modes: ["read-only", "workspace-write"],
+      supported_sandbox_modes: ["read-only", "workspace-write", "isolated"],
       default_sandbox_mode: "read-only",
+      supports_isolated_runs: codexIsolationStatus(detection.version).status === "verified",
+      isolation_status: codexIsolationStatus(detection.version).status,
       details: bridgeAvailable()
         ? "Codex can be launched with a Monde stdio MCP bridge."
         : "Codex was detected, but the Monde stdio bridge command is not on PATH. Set MONDE_MCP_BRIDGE_COMMAND/ARGS or install the monde CLI.",
@@ -159,12 +175,15 @@ export const codexAdapter: HarnessAdapter = {
       command: "codex",
       args,
       env: this.buildEnv(context),
-      cwd: context.monRoot,
+      cwd: context.workspaceMode === "isolated" ? context.scratchPath ?? context.workRoot : context.monRoot,
       stdinMode: "closed",
       outputMode: "codex-json-filtered"
     };
   },
   buildArgs(context) {
+    if (context.workspaceMode === "isolated") {
+      return isolatedCodexArgs(context);
+    }
     const args = [
       "exec",
       "--skip-git-repo-check",
@@ -186,13 +205,12 @@ export const codexAdapter: HarnessAdapter = {
       "-c",
       `mcp_servers.monde.enabled_tools=${tomlStringArray(mondeMcpTools)}`,
       "-c",
-      `mcp_servers.monde.env.MONDE_RUN_ID=${tomlString(context.runId)}`,
-      "-c",
-      `mcp_servers.monde.env.MONDE_RUN_TOKEN=${tomlString(context.runToken)}`,
-      "-c",
-      `mcp_servers.monde.env.MONDE_MCP_ADDR=${tomlString(context.mcpAddr)}`,
-      "-c",
-      `mcp_servers.monde.env.MONDE_SERVICE_ADDR=${tomlString(context.serviceAddr)}`
+      `mcp_servers.monde.env_vars=${tomlStringArray([
+        "MONDE_RUN_ID",
+        "MONDE_RUN_TOKEN",
+        "MONDE_MCP_ADDR",
+        "MONDE_SERVICE_ADDR"
+      ])}`
     ];
 
     if (context.model) {
@@ -231,6 +249,8 @@ export const opencodeAdapter: HarnessAdapter = {
       input_mode: "closed",
       output_mode: "plain",
       supported_sandbox_modes: ["adapter-default"],
+      supports_isolated_runs: false,
+      isolation_status: "unsupported",
       default_sandbox_mode: "adapter-default",
       details: "opencode was detected, but Monde has not pinned an automatic opencode MCP configuration path yet."
     };
@@ -329,6 +349,265 @@ function codexSandboxMode(context: HarnessAdapterContext): string {
   return context.sandboxMode === "workspace-write" ? "workspace-write" : "read-only";
 }
 
+function isolatedCodexArgs(context: HarnessAdapterContext): string[] {
+  if (!context.scratchPath || !context.contextSnapshotPath || !context.runScopesRoot) {
+    throw new Error("Isolated Codex runs require scratch, context snapshot, and run-scope paths.");
+  }
+
+  const profile = "monde_isolated";
+  const filesystemPermissions: Record<string, string> = {
+    ":minimal": "read",
+    [context.runScopesRoot]: "deny",
+    [context.contextSnapshotPath]: "read",
+    [context.scratchPath]: "write"
+  };
+  for (const mount of context.readMounts ?? []) {
+    filesystemPermissions[mount] = "read";
+  }
+  const args = [
+    "exec",
+    "--ignore-user-config",
+    "--skip-git-repo-check",
+    "--cd",
+    context.scratchPath,
+    "--json",
+    "--color",
+    "never",
+    "-c",
+    `approval_policy=${tomlString("never")}`,
+    "-c",
+    `default_permissions=${tomlString(profile)}`,
+    "-c",
+    `permissions.${profile}.filesystem=${tomlStringMap(filesystemPermissions)}`,
+    "-c",
+    `mcp_servers.monde.command=${tomlString(bridgeCommand())}`,
+    "-c",
+    `mcp_servers.monde.args=${tomlStringArray(bridgeArgs())}`,
+    "-c",
+    `mcp_servers.monde.default_tools_approval_mode=${tomlString("approve")}`,
+    "-c",
+    `mcp_servers.monde.enabled_tools=${tomlStringArray(mondeMcpTools)}`,
+    "-c",
+    `mcp_servers.monde.env_vars=${tomlStringArray([
+      "MONDE_RUN_ID",
+      "MONDE_RUN_TOKEN",
+      "MONDE_MCP_ADDR",
+      "MONDE_SERVICE_ADDR"
+    ])}`
+  ];
+
+  if (context.model) {
+    args.push("--model", context.model);
+  }
+  args.push(`${runtimePromptForContext(context)}\n\nOperator request:\n${context.prompt}`);
+  return args;
+}
+
+export interface CodexIsolationFingerprint {
+  codex_version: string;
+  codex_binary_sha256: string;
+  bwrap_version: string;
+  bwrap_binary_sha256: string;
+  platform: string;
+  release: string;
+  arch: string;
+}
+
+export interface CodexIsolationAttestation {
+  verified_at: string;
+  fingerprint: CodexIsolationFingerprint;
+  command_probe: "passed";
+  stdio_child_probe: "passed";
+}
+
+export function codexIsolationAttestationPath(): string {
+  return path.join(getMondePlatformPaths().dataDir, "adapter-attestations", "codex-isolation.json");
+}
+
+export function currentCodexIsolationFingerprint(): CodexIsolationFingerprint | undefined {
+  const codex = commandDetection("codex", "Codex is unavailable.");
+  const bwrap = spawnSync("bwrap", ["--version"], { encoding: "utf8" });
+  const codexPath = findExecutable("codex");
+  const bwrapPath = findExecutable("bwrap");
+  if (!codex.available || bwrap.error || bwrap.status !== 0 || !codexPath || !bwrapPath) {
+    return undefined;
+  }
+  return {
+    codex_version: codex.version ?? "unknown",
+    codex_binary_sha256: hashFile(codexPath),
+    bwrap_version: (bwrap.stdout || bwrap.stderr).trim().split(/\r?\n/)[0],
+    bwrap_binary_sha256: hashFile(bwrapPath),
+    platform: process.platform,
+    release: os.release(),
+    arch: os.arch()
+  };
+}
+
+export function readCodexIsolationAttestation(): CodexIsolationAttestation | undefined {
+  const fingerprint = currentCodexIsolationFingerprint();
+  if (!fingerprint) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(codexIsolationAttestationPath(), "utf8")) as CodexIsolationAttestation;
+    return JSON.stringify(parsed.fingerprint) === JSON.stringify(fingerprint) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function verifyCodexIsolation(): CodexIsolationAttestation {
+  const fingerprint = currentCodexIsolationFingerprint();
+  if (!fingerprint || process.platform !== "linux") {
+    throw new Error("Codex isolation verification requires Linux, Codex permission profiles, and bubblewrap.");
+  }
+
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "monde-isolation-verify-"));
+  try {
+    const scopesRoot = path.join(tempRoot, "run-scopes");
+    const currentRoot = path.join(scopesRoot, "current");
+    const siblingRoot = path.join(scopesRoot, "sibling");
+    const contextPath = path.join(currentRoot, "context");
+    const scratchPath = path.join(currentRoot, "scratch");
+    const siblingSecret = path.join(siblingRoot, "secret.txt");
+    fs.mkdirSync(contextPath, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(scratchPath, { mode: 0o700 });
+    fs.mkdirSync(siblingRoot, { mode: 0o700 });
+    fs.writeFileSync(path.join(contextPath, "SOUL.md"), "verification context\n", { mode: 0o400 });
+    fs.writeFileSync(siblingSecret, "sibling secret\n", { mode: 0o600 });
+
+    const profile = "monde_verify";
+    const commandProbe = spawnSync(
+      "codex",
+      [
+        "sandbox",
+        "-P",
+        profile,
+        "-C",
+        scratchPath,
+        "-c",
+        `permissions.${profile}.filesystem=${tomlStringMap({
+          ":minimal": "read",
+          [scopesRoot]: "deny",
+          [contextPath]: "read",
+          [scratchPath]: "write"
+        })}`,
+        process.execPath,
+        "-e",
+        isolationProbeScript(siblingSecret, path.join(scratchPath, "codex-probe.txt"))
+      ],
+      { encoding: "utf8" }
+    );
+    if (commandProbe.error || commandProbe.status !== 0 || !fs.existsSync(path.join(scratchPath, "codex-probe.txt"))) {
+      throw new Error(
+        `Codex command isolation probe failed: ${commandProbe.error?.message ?? (commandProbe.stderr || commandProbe.stdout)}`
+      );
+    }
+
+    const childProbe = spawnSync(
+      "bwrap",
+      [
+        "--die-with-parent",
+        "--unshare-pid",
+        "--unshare-ipc",
+        ...systemReadOnlyBindArgs(),
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/run",
+        "--dir",
+        "/run/monde",
+        "--bind",
+        scratchPath,
+        "/run/monde/scratch",
+        "--chdir",
+        "/run/monde/scratch",
+        process.execPath,
+        "-e",
+        isolationProbeScript(siblingSecret, "/run/monde/scratch/stdio-probe.txt")
+      ],
+      { encoding: "utf8" }
+    );
+    if (childProbe.error || childProbe.status !== 0 || !fs.existsSync(path.join(scratchPath, "stdio-probe.txt"))) {
+      throw new Error(
+        `Stdio child isolation probe failed: ${childProbe.error?.message ?? (childProbe.stderr || childProbe.stdout)}`
+      );
+    }
+
+    const attestation: CodexIsolationAttestation = {
+      verified_at: new Date().toISOString(),
+      fingerprint,
+      command_probe: "passed",
+      stdio_child_probe: "passed"
+    };
+    const attestationPath = codexIsolationAttestationPath();
+    fs.mkdirSync(path.dirname(attestationPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(attestationPath, `${JSON.stringify(attestation, null, 2)}\n`, { mode: 0o600 });
+    return attestation;
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+}
+
+function codexIsolationStatus(version?: string): {
+  status: "verified" | "verification_required" | "unsupported";
+} {
+  if (process.platform !== "linux" || !versionSupportsPermissionProfiles(version) || !findExecutable("bwrap")) {
+    return { status: "unsupported" };
+  }
+  return { status: readCodexIsolationAttestation() ? "verified" : "verification_required" };
+}
+
+function versionSupportsPermissionProfiles(version?: string): boolean {
+  const match = version?.match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!match) {
+    return false;
+  }
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 0 || minor >= 138;
+}
+
+function findExecutable(command: string): string | undefined {
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter)) {
+    if (!directory) continue;
+    const candidate = path.join(directory, command);
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return fs.realpathSync.native(candidate);
+    } catch {
+      // Continue searching PATH.
+    }
+  }
+  return undefined;
+}
+
+function hashFile(filePath: string): string {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function isolationProbeScript(siblingPath: string, outputPath: string): string {
+  return [
+    "const fs=require('node:fs');",
+    `try{fs.readFileSync(${JSON.stringify(siblingPath)});process.exit(91)}catch{}`,
+    `fs.writeFileSync(${JSON.stringify(outputPath)},'passed\\n')`
+  ].join("");
+}
+
+function systemReadOnlyBindArgs(): string[] {
+  const args: string[] = [];
+  for (const systemPath of ["/usr", "/bin", "/lib", "/lib64"]) {
+    if (fs.existsSync(systemPath)) {
+      args.push("--ro-bind", systemPath, systemPath);
+    }
+  }
+  return args;
+}
+
 function runtimePromptForContext(context: HarnessAdapterContext): string {
   if (context.runtimePrompt) {
     return context.runtimePrompt;
@@ -384,6 +663,12 @@ function tomlString(value: string): string {
 
 function tomlStringArray(values: string[]): string {
   return `[${values.map(tomlString).join(", ")}]`;
+}
+
+function tomlStringMap(values: Record<string, string>): string {
+  return `{${Object.entries(values)
+    .map(([key, value]) => `${tomlString(key)}=${tomlString(value)}`)
+    .join(",")}}`;
 }
 
 function bridgeAvailable(): boolean {

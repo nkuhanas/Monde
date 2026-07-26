@@ -16,18 +16,26 @@ import { getHarnessAdapter, type HarnessInputMode, type HarnessInteractionMode, 
 import { createRunToken, hashRunToken, verifyRunToken } from "./run-auth.js";
 import { RunEventBus } from "./run-events.js";
 import { BasicProcessRunner, type HarnessRunner, type RunningProcess } from "./basic-process-runner.js";
-import { resolveRunScope, type RunScopeSnapshot } from "./scope.js";
+import {
+  cleanupRunScopeFiles,
+  materializeRunScope,
+  resolveRunScope,
+  sealRunScopeFiles,
+  type RunScopeSnapshot
+} from "./scope.js";
 import type { MonRepository } from "./repositories/mons.js";
 import type { MondeRepository } from "./repositories/mondes.js";
 import type { PlanRepository, PlanAssignmentStatus } from "./repositories/plans.js";
 import type { ProcessSlotRepository } from "./repositories/process-slots.js";
 import type { RunRepository } from "./repositories/runs.js";
+import type { RunWorkspaceRepository } from "./repositories/run-workspaces.js";
 import type { ArtifactRepository } from "./repositories/artifacts.js";
 import type { LogRepository } from "./repositories/logs.js";
 
 export interface RunManagerConfig {
   serviceAddr: string;
   mcpAddr: string;
+  dataDir?: string;
 }
 
 export interface RunManagerTimer {
@@ -98,6 +106,7 @@ export class RunManager {
       plans?: PlanRepository;
       processSlots?: ProcessSlotRepository;
       runs: RunRepository;
+      runWorkspaces?: RunWorkspaceRepository;
       logs: LogRepository;
       artifacts: ArtifactRepository;
       events: RunEventBus;
@@ -127,6 +136,15 @@ export class RunManager {
     }
 
     const baseScope = resolveRunScope(monde, mon);
+    const harnessOverride = typeof run.execution.harness_override === "string" ? run.execution.harness_override : undefined;
+    const selectedBaseScope = harnessOverride ? { ...baseScope, harness: harnessOverride } : baseScope;
+    const adapter = getHarnessAdapter(selectedBaseScope.harness);
+    const adapterDetection = adapter?.detect();
+    if (selectedBaseScope.workspace_mode === "isolated" && adapterDetection?.supports_isolated_runs !== true) {
+      throw new Error(
+        `${adapter?.label ?? selectedBaseScope.harness} cannot enforce isolated runs: ${adapterDetection?.isolation_status ?? "unsupported"}`
+      );
+    }
     const oldestQueued = this.deps.runs.getOldestQueuedForMon(run.monde_id, run.mon_id);
     if (run.status === "queued" && oldestQueued && oldestQueued.id !== run.id) {
       return { run, started: false };
@@ -146,10 +164,31 @@ export class RunManager {
         active_run_ids: reservation.activeRunIds
       };
     }
-    const harnessOverride = typeof run.execution.harness_override === "string" ? run.execution.harness_override : undefined;
-    const scope = harnessOverride ? { ...baseScope, harness: harnessOverride } : baseScope;
-    const adapter = getHarnessAdapter(scope.harness);
-    const adapterDetection = adapter?.detect();
+    let scope = selectedBaseScope;
+    if (
+      selectedBaseScope.workspace_mode === "isolated" ||
+      selectedBaseScope.mon_json.actor_context.length > 0
+    ) {
+      if (!this.deps.config.dataDir) {
+        this.deps.processSlots?.release(run.id);
+        throw new Error("Run-scope data directory is unavailable.");
+      }
+      try {
+        scope = materializeRunScope(selectedBaseScope, run.id, this.deps.config.dataDir);
+        if (scope.scope_root) {
+          this.deps.runWorkspaces?.register({
+            runId: run.id,
+            workspaceMode: scope.workspace_mode,
+            scopeRoot: scope.scope_root,
+            contextPath: scope.context_snapshot_path,
+            scratchPath: scope.scratch_path
+          });
+        }
+      } catch (error) {
+        this.deps.processSlots?.release(run.id);
+        throw error;
+      }
+    }
     const runToken = createRunToken();
     const runnerType = runnerTypeForHarness(scope.harness);
     const interactionMode = interactionModeForHarness(scope.harness);
@@ -158,7 +197,9 @@ export class RunManager {
     const requestedSandboxMode = requestedSandboxModeForRun(run, scope);
     const sandboxMode = sandboxModeForHarness(scope.harness, requestedSandboxMode);
     const canWrite = canWriteForHarness(scope.harness, sandboxMode);
-    const diffCapture = canWrite ? captureGitBaseline(scope.monde_root) : { enabled: false, reason: "run_not_write_capable" };
+    const diffCapture = canWrite && scope.workspace_mode === "shared"
+      ? captureGitBaseline(scope.monde_root)
+      : { enabled: false, reason: scope.workspace_mode === "isolated" ? "isolated_scratch_workspace" : "run_not_write_capable" };
     const execution = {
       runner: scope.harness,
       runner_type: runnerType,
@@ -178,7 +219,7 @@ export class RunManager {
       sandbox_mode: sandboxMode,
       approval_mode: approvalModeForHarness(scope.harness),
       can_write: canWrite,
-      write_scope: writeScopeForHarness(scope.harness, scope.work_root, canWrite),
+      write_scope: writeScopeForHarness(scope.harness, scope.execution_root, canWrite),
       output_mode: outputMode,
       diff_capture: diffCapture,
       terminal: {
@@ -776,6 +817,7 @@ export class RunManager {
         continue;
       }
       this.deps.runs.updateLifecycle(run.id, finishRunInterrupted(run, "lost"));
+      this.sealRunWorkspace(run.id);
       this.finalizeWriteEvidence(run.id);
       this.revokeRunToken(run.id);
       this.deps.events.publish(run.id, "run_finished", {
@@ -786,6 +828,35 @@ export class RunManager {
       });
     }
     this.deps.processSlots?.releaseOrphans();
+  }
+
+  sweepExpiredRunScopes(now = new Date().toISOString()): void {
+    if (!this.deps.runWorkspaces || !this.deps.config.dataDir) {
+      return;
+    }
+    for (const workspace of this.deps.runWorkspaces.listExpired(now)) {
+      try {
+        cleanupRunScopeFiles(workspace.scope_root, this.deps.config.dataDir);
+        this.deps.runWorkspaces.markCleaned(workspace.run_id, now);
+        if (this.deps.runs.get(workspace.run_id)) {
+          this.deps.events.publish(workspace.run_id, "run_scope_cleaned", {
+            run_id: workspace.run_id,
+            workspace_mode: workspace.workspace_mode,
+            cleanup_attempts: workspace.cleanup_attempts + 1
+          });
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.deps.runWorkspaces.markCleanupFailed(workspace.run_id, message);
+        if (this.deps.runs.get(workspace.run_id)) {
+          this.deps.events.publish(workspace.run_id, "run_scope_cleanup_failed", {
+            run_id: workspace.run_id,
+            error: message,
+            cleanup_attempts: workspace.cleanup_attempts + 1
+          });
+        }
+      }
+    }
   }
 
   private handleProcessExit(runId: string, exit: { code: number | null; signal: NodeJS.Signals | null }): void {
@@ -801,12 +872,14 @@ export class RunManager {
       return;
     }
     if (current.status === "finished") {
+      this.sealRunWorkspace(runId);
       void this.dispatchQueuedForMon(current.monde_id, current.mon_id);
       return;
     }
 
     const patch = running?.stopRequested ? finishRunStopped(current) : finishRunFromExit(current, exit);
     this.deps.runs.updateLifecycle(runId, patch);
+    this.sealRunWorkspace(runId);
     const finished = this.requireRun(runId);
     this.finalizeWriteEvidence(runId);
     this.revokeRunToken(runId);
@@ -838,6 +911,7 @@ export class RunManager {
     }
 
     this.deps.runs.updateLifecycle(runId, finishRunInterrupted(current, "crashed"));
+    this.sealRunWorkspace(runId);
     const finished = this.requireRun(runId);
     this.finalizeWriteEvidence(runId);
     this.revokeRunToken(runId);
@@ -1044,6 +1118,37 @@ export class RunManager {
     });
   }
 
+  private sealRunWorkspace(runId: string): void {
+    const workspace = this.deps.runWorkspaces?.get(runId);
+    if (!workspace || workspace.state === "sealed" || workspace.state === "cleaned") {
+      return;
+    }
+    const run = this.deps.runs.get(runId);
+    const recoverySeconds =
+      run?.scope_snapshot?.recovery_window_seconds &&
+      typeof run.scope_snapshot.recovery_window_seconds === "number"
+        ? run.scope_snapshot.recovery_window_seconds
+        : 86400;
+    const sealedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.parse(sealedAt) + recoverySeconds * 1000).toISOString();
+    try {
+      sealRunScopeFiles(workspace.scope_root);
+      this.deps.runWorkspaces?.seal(runId, sealedAt, expiresAt);
+      if (run) {
+        this.deps.events.publish(runId, "run_scope_sealed", {
+          run_id: runId,
+          workspace_mode: workspace.workspace_mode,
+          expires_at: expiresAt
+        });
+      }
+    } catch (error) {
+      this.deps.runWorkspaces?.markCleanupFailed(
+        runId,
+        `seal_failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
   private requireRun(runId: string): RunRecord {
     const run = this.deps.runs.get(runId);
     if (!run) {
@@ -1075,6 +1180,9 @@ function planAssignmentStatusForRun(run: RunRecord): PlanAssignmentStatus {
 }
 
 function requestedSandboxModeForRun(run: RunRecord, scope: RunScopeSnapshot): string {
+  if (scope.workspace_mode === "isolated") {
+    return "isolated";
+  }
   if (typeof run.execution.sandbox_mode === "string") {
     return run.execution.sandbox_mode;
   }
@@ -1102,7 +1210,11 @@ function requestedSandboxModeForRun(run: RunRecord, scope: RunScopeSnapshot): st
 
 function sandboxModeForHarness(harness: string, requestedMode: string): string {
   if (harness === "codex") {
-    return requestedMode === "workspace-write" ? "workspace-write" : "read-only";
+    return requestedMode === "isolated"
+      ? "isolated"
+      : requestedMode === "workspace-write"
+        ? "workspace-write"
+        : "read-only";
   }
 
   if (harness === "opencode") {
@@ -1118,7 +1230,7 @@ function approvalModeForHarness(harness: string): string {
 
 function canWriteForHarness(harness: string, sandboxMode: string): boolean {
   if (harness === "codex") {
-    return sandboxMode === "workspace-write";
+    return sandboxMode === "workspace-write" || sandboxMode === "isolated";
   }
 
   return harness === "basic-process";

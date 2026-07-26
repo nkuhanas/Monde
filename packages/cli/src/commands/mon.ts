@@ -40,6 +40,9 @@ export function createMon(directoryName: string, options: MonCreateOptions): voi
     default_model: options.model ?? null,
     work_root: "..",
     max_active_runs: 1,
+    run_workspace: { mode: "shared" },
+    actor_context: [],
+    read_mounts: [],
     capabilities: [],
     created_at: new Date().toISOString(),
     created_under_monde_id: mondeId

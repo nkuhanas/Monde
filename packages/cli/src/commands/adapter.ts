@@ -1,4 +1,4 @@
-import { harnessAdapters } from "@monde/adapters";
+import { harnessAdapters, verifyCodexIsolation } from "@monde/adapters";
 
 export function listAdapters(): void {
   for (const adapter of harnessAdapters) {
@@ -52,6 +52,13 @@ export function inspectAdapter(adapterId: string): void {
       2
     )
   );
+}
+
+export function verifyAdapterIsolation(adapterId: string): void {
+  if (adapterId !== "codex") {
+    throw new Error(`Isolation verification is not implemented for adapter: ${adapterId}`);
+  }
+  console.log(JSON.stringify(verifyCodexIsolation(), null, 2));
 }
 
 function safeInspect<T>(fn: () => T): T | { error: string } {

@@ -38,7 +38,24 @@ const MonPatchSchema = z
     capabilities: z.array(z.string()).optional(),
     harness_defaults: HarnessDefaultsSchema.optional(),
     allow_external_work_root: z.boolean().optional(),
-    max_active_runs: z.number().int().min(1).max(32).optional()
+    max_active_runs: z.number().int().min(1).max(32).optional(),
+    run_workspace: z
+      .discriminatedUnion("mode", [
+        z.object({ mode: z.literal("shared") }),
+        z.object({
+          mode: z.literal("isolated"),
+          recovery_window_seconds: z.number().int().positive().max(604800).default(86400)
+        })
+      ])
+      .optional(),
+    actor_context: z
+      .array(z.object({ root: z.enum(["mon", "work"]), path: z.string().min(1) }))
+      .max(32)
+      .optional(),
+    read_mounts: z
+      .array(z.object({ root: z.enum(["mon", "work"]), path: z.string().min(1) }))
+      .max(16)
+      .optional()
   })
   .strict();
 
@@ -91,6 +108,9 @@ function monDto(mon: MonRow): MonRow & {
   harness_defaults?: Record<string, { sandbox_mode?: string }>;
   allow_external_work_root?: boolean;
   max_active_runs?: number;
+  run_workspace?: MonConfig["run_workspace"];
+  actor_context?: MonConfig["actor_context"];
+  read_mounts?: MonConfig["read_mounts"];
 } {
   const config = readMonConfig(mon.mon_root);
   if (!config) {
@@ -108,7 +128,10 @@ function monDto(mon: MonRow): MonRow & {
     capabilities: config.capabilities,
     harness_defaults: config.harness_defaults,
     allow_external_work_root: config.allow_external_work_root,
-    max_active_runs: config.max_active_runs
+    max_active_runs: config.max_active_runs,
+    run_workspace: config.run_workspace,
+    actor_context: config.actor_context,
+    read_mounts: config.read_mounts
   };
 }
 
