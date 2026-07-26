@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 
-export const schemaVersion = 8;
+export const schemaVersion = 9;
 
 export interface MondeDatabase {
   db: DatabaseSync;
@@ -330,6 +330,27 @@ export function migrateDatabase(db: DatabaseSync): void {
           ON external_executions(run_id);
         CREATE INDEX IF NOT EXISTS external_executions_deadline_idx
           ON external_executions(phase, completion_deadline_at);
+      `);
+    }
+
+    if (current < 9) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS external_mcp_grants (
+          id TEXT PRIMARY KEY,
+          external_execution_id TEXT REFERENCES external_executions(id) ON DELETE CASCADE,
+          run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+          server_id TEXT NOT NULL,
+          audience TEXT NOT NULL,
+          token_hash TEXT NOT NULL,
+          claims_json TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          revoked_at TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(run_id, server_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS external_mcp_grants_run_idx
+          ON external_mcp_grants(run_id, revoked_at);
       `);
     }
 

@@ -406,6 +406,17 @@ export class ExternalExecutionRepository {
     return this.getByRunId(runId);
   }
 
+  setTerminalConditionByRun(runId: string, condition: string, now = new Date().toISOString()): ExternalExecutionRecord | undefined {
+    this.db
+      .prepare(
+        `UPDATE external_executions
+         SET condition = @condition, updated_at = @updated_at
+         WHERE run_id = @run_id AND phase = 'terminal' AND outcome = 'failed'`
+      )
+      .run({ run_id: runId, condition, updated_at: now });
+    return this.getByRunId(runId);
+  }
+
   expireMissingCompletions(now = new Date().toISOString()): ExternalExecutionRecord[] {
     const candidates = this.db
       .prepare(

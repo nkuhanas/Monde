@@ -132,6 +132,14 @@ export function cleanupRunScopeFiles(scopeRoot: string, dataDir: string): void {
   fs.rmSync(target, { recursive: true, force: true });
 }
 
+export function resolveRunScopedPath(
+  scope: RunScopeSnapshot,
+  entry: { root: "mon" | "work"; path: string },
+  label: string
+): string {
+  return canonicalContainedPath(entry.root === "mon" ? scope.mon_root : scope.work_root, entry.path, label);
+}
+
 function canonicalDirectory(value: string, label: string): string {
   let canonical: string;
   try {

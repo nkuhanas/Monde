@@ -12,7 +12,13 @@ import {
   startRunLifecycle,
   type RunRecord
 } from "@monde/core";
-import { getHarnessAdapter, type HarnessInputMode, type HarnessInteractionMode, type HarnessOutputMode } from "@monde/adapters";
+import {
+  getHarnessAdapter,
+  type ExternalMcpRuntime,
+  type HarnessInputMode,
+  type HarnessInteractionMode,
+  type HarnessOutputMode
+} from "@monde/adapters";
 import { createRunToken, hashRunToken, verifyRunToken } from "./run-auth.js";
 import { RunEventBus } from "./run-events.js";
 import { BasicProcessRunner, type HarnessRunner, type RunningProcess } from "./basic-process-runner.js";
@@ -20,6 +26,7 @@ import {
   cleanupRunScopeFiles,
   materializeRunScope,
   resolveRunScope,
+  resolveRunScopedPath,
   sealRunScopeFiles,
   type RunScopeSnapshot
 } from "./scope.js";
@@ -31,6 +38,7 @@ import type { RunRepository } from "./repositories/runs.js";
 import type { RunWorkspaceRepository } from "./repositories/run-workspaces.js";
 import type { ArtifactRepository } from "./repositories/artifacts.js";
 import type { ExternalExecutionRepository } from "./repositories/external-executions.js";
+import type { ExternalMcpGrantRepository } from "./repositories/external-mcp-grants.js";
 import type { LogRepository } from "./repositories/logs.js";
 
 export interface RunManagerConfig {
@@ -104,6 +112,7 @@ export class RunManager {
     private readonly deps: {
       mondes: MondeRepository;
       externalExecutions?: ExternalExecutionRepository;
+      externalMcpGrants?: ExternalMcpGrantRepository;
       mons: MonRepository;
       plans?: PlanRepository;
       processSlots?: ProcessSlotRepository;
@@ -142,6 +151,14 @@ export class RunManager {
     const selectedBaseScope = harnessOverride ? { ...baseScope, harness: harnessOverride } : baseScope;
     const adapter = getHarnessAdapter(selectedBaseScope.harness);
     const adapterDetection = adapter?.detect();
+    if (
+      selectedBaseScope.mon_json.external_mcp_servers.length > 0 &&
+      adapterDetection?.supports_external_mcp !== true
+    ) {
+      throw new Error(
+        `${adapter?.label ?? selectedBaseScope.harness} cannot configure declared external MCP servers.`
+      );
+    }
     if (selectedBaseScope.workspace_mode === "isolated" && adapterDetection?.supports_isolated_runs !== true) {
       throw new Error(
         `${adapter?.label ?? selectedBaseScope.harness} cannot enforce isolated runs: ${adapterDetection?.isolation_status ?? "unsupported"}`
@@ -192,6 +209,15 @@ export class RunManager {
       }
     }
     const runToken = createRunToken();
+    let externalMcp: ReturnType<RunManager["buildExternalMcpRuntime"]>;
+    try {
+      externalMcp = this.buildExternalMcpRuntime(run, scope);
+    } catch (error) {
+      this.deps.processSlots?.release(run.id);
+      this.deps.externalMcpGrants?.revokeForRun(run.id);
+      this.sealRunWorkspace(run.id);
+      throw error;
+    }
     const runnerType = runnerTypeForHarness(scope.harness);
     const interactionMode = interactionModeForHarness(scope.harness);
     const inputMode = inputModeForHarness(scope.harness);
@@ -233,7 +259,12 @@ export class RunManager {
         columns: Number.parseInt(process.env.COLUMNS ?? "120", 10),
         rows: Number.parseInt(process.env.LINES ?? "32", 10)
       },
-      scope_fingerprints: captureScopeFingerprints(scope)
+      scope_fingerprints: captureScopeFingerprints(scope),
+      external_mcp_servers: externalMcp.runtimes.map((runtime) => runtime.server.id),
+      required_external_mcp_servers: externalMcp.runtimes
+        .filter((runtime) => runtime.server.required)
+        .map((runtime) => runtime.server.id),
+      external_mcp_grant_ids: externalMcp.grantIds
     };
 
     this.deps.runs.updateScopeAndExecution(run.id, scope as unknown as Record<string, unknown>, execution);
@@ -274,6 +305,8 @@ export class RunManager {
         sandboxMode: String(execution.sandbox_mode),
         serviceAddr: this.deps.config.serviceAddr,
         mcpAddr: this.deps.config.mcpAddr,
+        externalMcpServers: externalMcp.runtimes,
+        externalMcpIntrospectionUrl: externalMcp.introspectionUrl,
         onSpawn: (pid) => {
           const current = this.requireRun(run.id);
           this.deps.runs.updateExecution(run.id, { ...current.execution, pid });
@@ -282,6 +315,16 @@ export class RunManager {
           this.deps.events.publish(run.id, "run_output", { run_id: run.id, stream: "stdout", chunk });
         },
         onStderr: (chunk) => {
+          if (
+            externalMcp.runtimes.some((runtime) => runtime.server.required) &&
+            /\bmcp\b|model context protocol|initialize|startup/i.test(chunk)
+          ) {
+            const current = this.requireRun(run.id);
+            this.deps.runs.updateExecution(run.id, {
+              ...current.execution,
+              required_external_mcp_startup_error: true
+            });
+          }
           this.deps.events.publish(run.id, "run_error_output", { run_id: run.id, stream: "stderr", chunk });
         },
         onExit: (exit) => this.handleProcessExit(run.id, exit),
@@ -1000,6 +1043,12 @@ export class RunManager {
             : 86400
         )
       : undefined;
+    if (
+      externalUpdated?.outcome === "failed" &&
+      current.execution.required_external_mcp_startup_error === true
+    ) {
+      this.deps.externalExecutions?.setTerminalConditionByRun(runId, "required_mcp_unavailable");
+    }
     const patch = externalUpdated?.outcome === "cancelled"
       ? { ...finishRunStopped(current), outcome: "canceled" as const }
       : running?.stopRequested
@@ -1053,7 +1102,12 @@ export class RunManager {
     }
 
     this.deps.runs.updateLifecycle(runId, finishRunInterrupted(current, "crashed"));
-    this.deps.externalExecutions?.markFailedByRun(runId, "process_crashed");
+    this.deps.externalExecutions?.markFailedByRun(
+      runId,
+      current.execution.required_external_mcp_startup_error === true
+        ? "required_mcp_unavailable"
+        : "process_crashed"
+    );
     this.sealRunWorkspace(runId);
     const finished = this.requireRun(runId);
     this.finalizeWriteEvidence(runId);
@@ -1249,6 +1303,7 @@ export class RunManager {
   }
 
   private revokeRunToken(runId: string): void {
+    this.deps.externalMcpGrants?.revokeForRun(runId);
     const run = this.deps.runs.get(runId);
     if (!run || typeof run.execution.run_token_hash !== "string") {
       return;
@@ -1259,6 +1314,62 @@ export class RunManager {
       ...execution,
       run_token_revoked_at: new Date().toISOString()
     });
+  }
+
+  private buildExternalMcpRuntime(
+    run: RunRecord,
+    scope: RunScopeSnapshot
+  ): { runtimes: ExternalMcpRuntime[]; grantIds: string[]; introspectionUrl?: string } {
+    const runtimes: ExternalMcpRuntime[] = [];
+    const grantIds: string[] = [];
+    const externalExecution = this.deps.externalExecutions?.getByRunId(run.id);
+    const introspectionUrl = externalMcpIntrospectionUrl(this.deps.config.serviceAddr);
+
+    for (const server of scope.mon_json.external_mcp_servers) {
+      let token: string | undefined;
+      if (server.auth.type === "run_claims") {
+        if (!this.deps.externalMcpGrants) {
+          throw new Error(`External MCP grant storage is unavailable for server ${server.id}.`);
+        }
+        const expiresAt = new Date(Date.now() + scope.recovery_window_seconds * 1000).toISOString();
+        const issued = this.deps.externalMcpGrants.issue({
+          externalExecutionId: externalExecution?.id,
+          runId: run.id,
+          serverId: server.id,
+          audience: server.auth.audience,
+          claims: {
+            run_id: run.id,
+            mon_id: run.mon_id,
+            monde_id: run.monde_id,
+            integration_id: externalExecution?.integration_id ?? "monde",
+            external_execution_key: externalExecution?.external_execution_key ?? run.id,
+            external_scope: externalExecution?.external_scope ?? null
+          },
+          expiresAt
+        });
+        token = issued.token;
+        grantIds.push(issued.grant.id);
+      }
+
+      const resolvedReadMounts =
+        server.transport === "stdio"
+          ? server.read_mounts.map((mount) =>
+              resolveRunScopedPath(scope, mount, `external MCP ${server.id} read mount ${mount.path}`)
+            )
+          : [];
+      const resolvedCwd =
+        server.transport === "stdio" && server.cwd
+          ? resolveRunScopedPath(scope, server.cwd, `external MCP ${server.id} cwd`)
+          : undefined;
+      runtimes.push({ server, token, resolvedReadMounts, resolvedCwd });
+    }
+    return {
+      runtimes,
+      grantIds,
+      introspectionUrl: runtimes.some((runtime) => runtime.server.auth.type === "run_claims")
+        ? introspectionUrl
+        : undefined
+    };
   }
 
   private sealRunWorkspace(runId: string): void {
@@ -1525,6 +1636,16 @@ function statFingerprint(filePath: string): ScopeFingerprint {
 
 function sameFingerprint(a: ScopeFingerprint | undefined, b: ScopeFingerprint | undefined): boolean {
   return !!a && !!b && a.exists === b.exists && a.mtime_ms === b.mtime_ms && a.size === b.size;
+}
+
+function externalMcpIntrospectionUrl(serviceAddr: string): string {
+  const url = new URL("/external-mcp/introspect", serviceAddr);
+  if (url.hostname === "0.0.0.0") {
+    url.hostname = "127.0.0.1";
+  } else if (url.hostname === "[::]") {
+    url.hostname = "[::1]";
+  }
+  return url.toString();
 }
 
 function hitlHarnessForThread(run: RunRecord, scopeHarness: string): string {

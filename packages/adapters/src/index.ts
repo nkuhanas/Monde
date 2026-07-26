@@ -6,6 +6,14 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildRuntimePrompt, getMondePlatformPaths } from "@monde/core";
 import type { RunRecord } from "@monde/core";
+import type { MonConfig } from "@monde/core";
+
+export interface ExternalMcpRuntime {
+  server: MonConfig["external_mcp_servers"][number];
+  token?: string;
+  resolvedReadMounts: string[];
+  resolvedCwd?: string;
+}
 
 export interface HarnessAdapterContext {
   runId: string;
@@ -25,6 +33,8 @@ export interface HarnessAdapterContext {
   contextSnapshotPath?: string;
   readMounts?: string[];
   runScopesRoot?: string;
+  externalMcpServers?: ExternalMcpRuntime[];
+  externalMcpIntrospectionUrl?: string;
 }
 
 export interface HarnessLaunchCommand {
@@ -59,6 +69,7 @@ export interface HarnessDetection {
   details?: string;
   notes?: string[];
   supports_isolated_runs?: boolean;
+  supports_external_mcp?: boolean;
   isolation_status?: "verified" | "verification_required" | "unsupported";
 }
 
@@ -76,6 +87,12 @@ export interface HarnessAdapter {
 
 function baseEnv(context: HarnessAdapterContext): Record<string, string> {
   const runtimePrompt = runtimePromptForContext(context);
+  const externalGrantEnvironment: Record<string, string> = {};
+  for (const runtime of context.externalMcpServers ?? []) {
+    if (runtime.server.auth.type === "run_claims" && runtime.token) {
+      externalGrantEnvironment[runtime.server.auth.token_env_var] = runtime.token;
+    }
+  }
   return {
     MONDE_RUN_ID: context.runId,
     MONDE_RUN_TOKEN: context.runToken,
@@ -86,6 +103,10 @@ function baseEnv(context: HarnessAdapterContext): Record<string, string> {
     MONDE_WORKSPACE_MODE: context.workspaceMode ?? "shared",
     ...(context.scratchPath ? { MONDE_RUN_SCRATCH: context.scratchPath } : {}),
     ...(context.contextSnapshotPath ? { MONDE_ACTOR_CONTEXT: context.contextSnapshotPath } : {}),
+    ...(context.externalMcpIntrospectionUrl
+      ? { MONDE_RUN_CLAIMS_INTROSPECTION_URL: context.externalMcpIntrospectionUrl }
+      : {}),
+    ...externalGrantEnvironment,
     MONDE_RUNTIME_PROMPT: runtimePrompt,
     MONDE_MCP_CONFIG: JSON.stringify(stdioMcpConfig(context))
   };
@@ -158,6 +179,7 @@ export const codexAdapter: HarnessAdapter = {
       supported_sandbox_modes: ["read-only", "workspace-write", "isolated"],
       default_sandbox_mode: "read-only",
       supports_isolated_runs: codexIsolationStatus(detection.version).status === "verified",
+      supports_external_mcp: true,
       isolation_status: codexIsolationStatus(detection.version).status,
       details: bridgeAvailable()
         ? "Codex can be launched with a Monde stdio MCP bridge."
@@ -212,6 +234,8 @@ export const codexAdapter: HarnessAdapter = {
         "MONDE_SERVICE_ADDR"
       ])}`
     ];
+
+    appendExternalMcpArgs(args, context);
 
     if (context.model) {
       args.push("--model", context.model);
@@ -395,6 +419,8 @@ function isolatedCodexArgs(context: HarnessAdapterContext): string[] {
       "MONDE_SERVICE_ADDR"
     ])}`
   ];
+
+  appendExternalMcpArgs(args, context);
 
   if (context.model) {
     args.push("--model", context.model);
@@ -605,7 +631,130 @@ function systemReadOnlyBindArgs(): string[] {
       args.push("--ro-bind", systemPath, systemPath);
     }
   }
+  if (fs.existsSync("/etc")) {
+    args.push("--dir", "/etc");
+    for (const systemPath of ["/etc/hosts", "/etc/nsswitch.conf", "/etc/resolv.conf", "/etc/ssl"]) {
+      if (fs.existsSync(systemPath)) {
+        args.push("--ro-bind", systemPath, systemPath);
+      }
+    }
+  }
   return args;
+}
+
+function appendExternalMcpArgs(args: string[], context: HarnessAdapterContext): void {
+  for (const runtime of context.externalMcpServers ?? []) {
+    const server = runtime.server;
+    const prefix = `mcp_servers.${server.id}`;
+    if (server.transport === "streamable_http") {
+      args.push("-c", `${prefix}.url=${tomlString(server.url)}`);
+      if (server.auth.type === "run_claims") {
+        args.push("-c", `${prefix}.bearer_token_env_var=${tomlString(server.auth.token_env_var)}`);
+      }
+    } else {
+      const command =
+        context.workspaceMode === "isolated"
+          ? buildIsolatedStdioLaunch(runtime, context)
+          : { command: server.command, args: server.args };
+      args.push(
+        "-c",
+        `${prefix}.command=${tomlString(command.command)}`,
+        "-c",
+        `${prefix}.args=${tomlStringArray(command.args)}`
+      );
+      const envVars = [
+        ...(server.auth.type === "run_claims"
+          ? [server.auth.token_env_var, "MONDE_RUN_CLAIMS_INTROSPECTION_URL"]
+          : []),
+        ...(server.actor_context_access ? ["MONDE_ACTOR_CONTEXT"] : []),
+        ...(server.scratch_access !== "none" ? ["MONDE_RUN_SCRATCH"] : [])
+      ];
+      if (envVars.length > 0) {
+        args.push("-c", `${prefix}.env_vars=${tomlStringArray(envVars)}`);
+      }
+      if (context.workspaceMode !== "isolated" && runtime.resolvedCwd) {
+        args.push("-c", `${prefix}.cwd=${tomlString(runtime.resolvedCwd)}`);
+      }
+    }
+    args.push(
+      "-c",
+      `${prefix}.required=${server.required ? "true" : "false"}`,
+      "-c",
+      `${prefix}.startup_timeout_sec=${String(server.startup_timeout_seconds)}`
+    );
+  }
+}
+
+export function buildIsolatedStdioLaunch(
+  runtime: ExternalMcpRuntime,
+  context: HarnessAdapterContext
+): { command: string; args: string[] } {
+  if (runtime.server.transport !== "stdio" || !context.scratchPath || !context.contextSnapshotPath) {
+    throw new Error("Invalid isolated stdio MCP runtime.");
+  }
+  const mounts: Array<{ path: string; access: "read" | "write" }> = runtime.resolvedReadMounts.map((mount) => ({
+    path: mount,
+    access: "read"
+  }));
+  if (runtime.server.actor_context_access) {
+    mounts.push({ path: context.contextSnapshotPath, access: "read" });
+  }
+  if (runtime.resolvedCwd) {
+    mounts.push({ path: runtime.resolvedCwd, access: "read" });
+  }
+  if (runtime.server.scratch_access !== "none") {
+    mounts.push({
+      path: context.scratchPath,
+      access: runtime.server.scratch_access === "write" ? "write" : "read"
+    });
+  }
+
+  const args = [
+    "--die-with-parent",
+    "--unshare-pid",
+    "--unshare-ipc",
+    ...systemReadOnlyBindArgs(),
+    "--proc",
+    "/proc",
+    "--dev",
+    "/dev",
+    "--tmpfs",
+    "/tmp"
+  ];
+  const createdDirectories = new Set<string>([
+    "/",
+    "/usr",
+    "/bin",
+    "/lib",
+    "/lib64",
+    "/etc",
+    "/proc",
+    "/dev",
+    "/tmp"
+  ]);
+  for (const mount of mounts) {
+    appendBubblewrapParentDirectories(args, mount.path, createdDirectories);
+    args.push(mount.access === "write" ? "--bind" : "--ro-bind", mount.path, mount.path);
+  }
+  const cwd = runtime.resolvedCwd ?? (runtime.server.scratch_access !== "none" ? context.scratchPath : "/");
+  if (cwd !== "/") {
+    appendBubblewrapParentDirectories(args, cwd, createdDirectories);
+  }
+  args.push("--chdir", cwd, runtime.server.command, ...runtime.server.args);
+  return { command: "bwrap", args };
+}
+
+function appendBubblewrapParentDirectories(args: string[], target: string, created: Set<string>): void {
+  let current = path.dirname(target);
+  const parents: string[] = [];
+  while (current !== "/" && !created.has(current)) {
+    parents.push(current);
+    current = path.dirname(current);
+  }
+  for (const parent of parents.reverse()) {
+    args.push("--dir", parent);
+    created.add(parent);
+  }
 }
 
 function runtimePromptForContext(context: HarnessAdapterContext): string {

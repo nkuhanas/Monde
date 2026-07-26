@@ -1,6 +1,6 @@
 import type { RunOutcome, RunStatus } from "./run-state.js";
 import type { RunCloseReason, RunInteractionMode, RunOutcomeState, RunRuntimeState } from "./run-state.js";
-import type { RunOrigin, RunRecord } from "./schemas.js";
+import type { MonConfig, RunOrigin, RunRecord } from "./schemas.js";
 
 export type RunnerType = "basic-process" | "codex" | "opencode" | "pty" | "adapter-native";
 export type InteractionMode = "interactive" | "single-shot";
@@ -46,6 +46,7 @@ export interface MonDto {
   run_workspace?: { mode: "shared" } | { mode: "isolated"; recovery_window_seconds: number };
   actor_context?: Array<{ root: "mon" | "work"; path: string }>;
   read_mounts?: Array<{ root: "mon" | "work"; path: string }>;
+  external_mcp_servers?: MonConfig["external_mcp_servers"];
   capabilities?: string[];
   created_at?: string;
   updated_at?: string;

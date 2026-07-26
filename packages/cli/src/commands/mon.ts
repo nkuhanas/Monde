@@ -43,6 +43,7 @@ export function createMon(directoryName: string, options: MonCreateOptions): voi
     run_workspace: { mode: "shared" },
     actor_context: [],
     read_mounts: [],
+    external_mcp_servers: [],
     capabilities: [],
     created_at: new Date().toISOString(),
     created_under_monde_id: mondeId

@@ -7,6 +7,7 @@ import { openDatabase } from "./db.js";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 import { ArtifactRepository } from "./repositories/artifacts.js";
 import { ExternalExecutionRepository } from "./repositories/external-executions.js";
+import { ExternalMcpGrantRepository } from "./repositories/external-mcp-grants.js";
 import { LogRepository } from "./repositories/logs.js";
 import { MonRepository } from "./repositories/mons.js";
 import { MondeRepository } from "./repositories/mondes.js";
@@ -29,6 +30,7 @@ export async function createService() {
   const mcpApp = Fastify({ logger: true });
   const mondes = new MondeRepository(database.db);
   const externalExecutions = new ExternalExecutionRepository(database.db);
+  const externalMcpGrants = new ExternalMcpGrantRepository(database.db);
   const mons = new MonRepository(database.db);
   const plans = new PlanRepository(database.db);
   const processSlots = new ProcessSlotRepository(database.db);
@@ -44,6 +46,7 @@ export async function createService() {
   const runManager = new RunManager({
     mondes,
     externalExecutions,
+    externalMcpGrants,
     mons,
     plans,
     processSlots,
@@ -81,7 +84,7 @@ export async function createService() {
   });
 
   app.addHook("onRequest", async (request, reply) => {
-    if (request.url === "/health") {
+    if (request.url === "/health" || request.url === "/external-mcp/introspect") {
       return;
     }
 
@@ -117,6 +120,7 @@ export async function createService() {
     auth,
     mondes,
     externalExecutions,
+    externalMcpGrants,
     mons,
     plans,
     runs,

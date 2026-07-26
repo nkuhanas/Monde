@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
-import { basicProcessAdapter, getHarnessAdapter } from "@monde/adapters";
+import { basicProcessAdapter, getHarnessAdapter, type ExternalMcpRuntime } from "@monde/adapters";
 import type { RunScopeSnapshot } from "./scope.js";
 
 export interface StartRunInput {
@@ -12,6 +12,8 @@ export interface StartRunInput {
   scope: RunScopeSnapshot;
   serviceAddr: string;
   mcpAddr: string;
+  externalMcpServers?: ExternalMcpRuntime[];
+  externalMcpIntrospectionUrl?: string;
   onStdout(chunk: string): void;
   onStderr(chunk: string): void;
   onExit(exit: { code: number | null; signal: NodeJS.Signals | null }): void;
@@ -56,6 +58,8 @@ export class BasicProcessRunner implements HarnessRunner {
       contextSnapshotPath: input.scope.context_snapshot_path,
       readMounts: input.scope.read_mounts,
       runScopesRoot: input.scope.scope_root ? path.dirname(input.scope.scope_root) : undefined,
+      externalMcpServers: input.externalMcpServers,
+      externalMcpIntrospectionUrl: input.externalMcpIntrospectionUrl,
       scopeSnapshot: input.scope as unknown as Record<string, unknown>
     });
     const stdoutFilter = command.outputMode === "codex-json-filtered" ? new CodexJsonOutputFilter() : undefined;

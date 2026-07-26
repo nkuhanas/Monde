@@ -3,7 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import { z } from "zod";
-import { finishRunFromExit, MonConfigSchema, resolveWorkRoot } from "@monde/core";
+import {
+  ExternalMcpServerSchema,
+  finishRunFromExit,
+  MonConfigSchema,
+  resolveWorkRoot
+} from "@monde/core";
 import { canonicalSha256 } from "@monde/core";
 import type { BackupInfoDto, BackupMetadataDto, DoctorFindingDto, MonConfig } from "@monde/core";
 import type { RunCloseReason, RunRecord } from "@monde/core";
@@ -14,6 +19,7 @@ import {
   ExternalExecutionConflictError,
   ExternalExecutionRepository
 } from "./repositories/external-executions.js";
+import { ExternalMcpGrantRepository } from "./repositories/external-mcp-grants.js";
 import { LogRepository } from "./repositories/logs.js";
 import { MonRepository, type MonRow, type MonUpsert } from "./repositories/mons.js";
 import { MondeRepository } from "./repositories/mondes.js";
@@ -60,7 +66,8 @@ const MonPatchSchema = z
     read_mounts: z
       .array(z.object({ root: z.enum(["mon", "work"]), path: z.string().min(1) }))
       .max(16)
-      .optional()
+      .optional(),
+    external_mcp_servers: z.array(ExternalMcpServerSchema).max(8).optional()
   })
   .strict();
 
@@ -69,6 +76,7 @@ export interface RouteDeps {
   auth: ServiceAuth;
   mondes: MondeRepository;
   externalExecutions: ExternalExecutionRepository;
+  externalMcpGrants: ExternalMcpGrantRepository;
   mons: MonRepository;
   plans: PlanRepository;
   runs: RunRepository;
@@ -117,6 +125,7 @@ function monDto(mon: MonRow): MonRow & {
   run_workspace?: MonConfig["run_workspace"];
   actor_context?: MonConfig["actor_context"];
   read_mounts?: MonConfig["read_mounts"];
+  external_mcp_servers?: MonConfig["external_mcp_servers"];
 } {
   const config = readMonConfig(mon.mon_root);
   if (!config) {
@@ -137,12 +146,25 @@ function monDto(mon: MonRow): MonRow & {
     max_active_runs: config.max_active_runs,
     run_workspace: config.run_workspace,
     actor_context: config.actor_context,
-    read_mounts: config.read_mounts
+    read_mounts: config.read_mounts,
+    external_mcp_servers: config.external_mcp_servers
   };
 }
 
 export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
-  const { auth, mondes, mons, plans, runs, runEvents, eventBus, runManager, tools, externalExecutions } = deps;
+  const {
+    auth,
+    mondes,
+    mons,
+    plans,
+    runs,
+    runEvents,
+    eventBus,
+    runManager,
+    tools,
+    externalExecutions,
+    externalMcpGrants
+  } = deps;
   const logs = new LogRepository(deps.database.db);
   const artifacts = new ArtifactRepository(deps.database.db);
   app.get("/health", async () => ({
@@ -151,6 +173,13 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     db_path: getPlatformPaths().dbPath,
     schema_version: schemaVersion
   }));
+
+  app.post("/external-mcp/introspect", async (request) => {
+    const authorization = request.headers.authorization;
+    const token = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+    const claims = token ? externalMcpGrants.introspect(token) : undefined;
+    return claims ? { active: true, claims } : { active: false };
+  });
 
   app.get("/session", async () => ({
     service: "monde",
