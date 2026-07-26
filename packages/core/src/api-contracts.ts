@@ -42,6 +42,7 @@ export interface MonDto {
   default_model?: string | null;
   harness_defaults?: Record<string, { sandbox_mode?: string }>;
   allow_external_work_root?: boolean;
+  max_active_runs?: number;
   capabilities?: string[];
   created_at?: string;
   updated_at?: string;

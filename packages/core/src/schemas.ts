@@ -36,6 +36,7 @@ export const MonConfigSchema = z.object({
     .optional(),
   work_root: z.string().default(".."),
   allow_external_work_root: z.boolean().optional(),
+  max_active_runs: z.number().int().min(1).max(32).default(1),
   capabilities: z.array(z.string()).default([]),
   created_at: z.string(),
   created_under_monde_id: z.string().optional()

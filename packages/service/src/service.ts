@@ -10,6 +10,7 @@ import { LogRepository } from "./repositories/logs.js";
 import { MonRepository } from "./repositories/mons.js";
 import { MondeRepository } from "./repositories/mondes.js";
 import { PlanRepository } from "./repositories/plans.js";
+import { ProcessSlotRepository } from "./repositories/process-slots.js";
 import { RunEventRepository } from "./repositories/run-events.js";
 import { RunRepository } from "./repositories/runs.js";
 import { RunEventBus } from "./run-events.js";
@@ -27,6 +28,7 @@ export async function createService() {
   const mondes = new MondeRepository(database.db);
   const mons = new MonRepository(database.db);
   const plans = new PlanRepository(database.db);
+  const processSlots = new ProcessSlotRepository(database.db);
   const runs = new RunRepository(database.db);
   const runEvents = new RunEventRepository(database.db);
   const eventBus = new RunEventBus(runEvents);
@@ -39,6 +41,7 @@ export async function createService() {
     mondes,
     mons,
     plans,
+    processSlots,
     runs,
     logs,
     artifacts,

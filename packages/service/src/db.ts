@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 
-export const schemaVersion = 5;
+export const schemaVersion = 6;
 
 export interface MondeDatabase {
   db: DatabaseSync;
@@ -13,7 +13,7 @@ export function openDatabase(): MondeDatabase {
   ensureDirectory(paths.dataDir);
   const db = new DatabaseSync(paths.dbPath);
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
-  migrate(db);
+  migrateDatabase(db);
 
   return {
     db,
@@ -23,7 +23,7 @@ export function openDatabase(): MondeDatabase {
   };
 }
 
-function migrate(db: DatabaseSync): void {
+export function migrateDatabase(db: DatabaseSync): void {
   db.exec("BEGIN");
   try {
     db.exec(`
@@ -249,6 +249,21 @@ function migrate(db: DatabaseSync): void {
          WHERE interaction_mode = 'one_shot'
            AND outcome = 'unknown'
            AND outcome_state = 'succeeded';
+      `);
+    }
+
+    if (current < 6) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS process_slots (
+          run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+          monde_id TEXT NOT NULL,
+          mon_id TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          reserved_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS process_slots_mon_idx
+          ON process_slots(monde_id, mon_id, reserved_at);
       `);
     }
 

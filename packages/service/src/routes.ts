@@ -37,7 +37,8 @@ const MonPatchSchema = z
     default_model: z.string().nullable().optional(),
     capabilities: z.array(z.string()).optional(),
     harness_defaults: HarnessDefaultsSchema.optional(),
-    allow_external_work_root: z.boolean().optional()
+    allow_external_work_root: z.boolean().optional(),
+    max_active_runs: z.number().int().min(1).max(32).optional()
   })
   .strict();
 
@@ -89,6 +90,7 @@ function monDto(mon: MonRow): MonRow & {
   configured_work_root?: string;
   harness_defaults?: Record<string, { sandbox_mode?: string }>;
   allow_external_work_root?: boolean;
+  max_active_runs?: number;
 } {
   const config = readMonConfig(mon.mon_root);
   if (!config) {
@@ -105,7 +107,8 @@ function monDto(mon: MonRow): MonRow & {
     default_model: config.default_model,
     capabilities: config.capabilities,
     harness_defaults: config.harness_defaults,
-    allow_external_work_root: config.allow_external_work_root
+    allow_external_work_root: config.allow_external_work_root,
+    max_active_runs: config.max_active_runs
   };
 }
 
@@ -645,7 +648,8 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return reply.code(400).send({ error: "monde_id, mon_id, and prompt are required" });
     }
 
-    const activeRun = runs.getActiveForMon(body.monde_id, body.mon_id);
+    const activeRuns = runs.listActiveForMon(body.monde_id, body.mon_id);
+    const activeRun = activeRuns[0];
     if (activeRun) {
       if (runInputMode(activeRun) !== "open") {
         if (body.attach_active) {
@@ -660,12 +664,17 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
 
         const queued = createOperatorRun(body.monde_id, body.mon_id, body.prompt, body.title, body.harness, body.sandbox_mode);
         runs.insert(queued);
-        return reply.code(202).send({
-          run: queued,
-          started: false,
+        const dispatched = await runManager.dispatchQueuedForMon(body.monde_id, body.mon_id);
+        const started = dispatched.some((candidate) => candidate.id === queued.id);
+        return reply.code(started ? 201 : 202).send({
+          run: runs.get(queued.id),
+          started,
           active_run_id: activeRun.id,
+          active_run_ids: runs.listActiveForMon(body.monde_id, body.mon_id).map((candidate) => candidate.id),
           attached_to_active_run: false,
-          message: `Active run ${activeRun.id} has input_mode=${runInputMode(activeRun)}; created new operator-origin run ${queued.id} and left it queued.`
+          message: started
+            ? `Created and started operator-origin run ${queued.id} in an available process slot.`
+            : `Created operator-origin run ${queued.id} and left it queued behind active work.`
         });
       }
 
@@ -683,15 +692,6 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
           message: error instanceof Error ? error.message : String(error)
         });
       }
-    }
-
-    const olderActive = runs.getActiveForMon(body.monde_id, body.mon_id);
-    if (olderActive) {
-      return reply.code(202).send({
-        run: olderActive,
-        attached_to_active_run: true,
-        message: "Active run already exists."
-      });
     }
 
     const run = createOperatorRun(body.monde_id, body.mon_id, body.prompt, body.title, body.harness, body.sandbox_mode);
@@ -713,6 +713,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return reply.code(409).send({
         error: "mon_active",
         active_run_id: result.active_run_id,
+        active_run_ids: result.active_run_ids,
         run: result.run
       });
     }

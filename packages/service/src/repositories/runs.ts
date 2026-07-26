@@ -58,17 +58,20 @@ export class RunRepository {
     return row ? this.fromRow(row) : undefined;
   }
 
-  getActiveForMon(mondeId: string, monId: string): RunRecord | undefined {
-    const row = this.db
+  listActiveForMon(mondeId: string, monId: string): RunRecord[] {
+    const rows = this.db
       .prepare(
         `SELECT * FROM runs
          WHERE monde_id = ? AND mon_id = ? AND status IN ('starting', 'active') AND interaction_mode != 'hitl_thread'
-         ORDER BY started_at DESC, created_at DESC
-         LIMIT 1`
+         ORDER BY started_at ASC, created_at ASC, id ASC`
       )
-      .get(mondeId, monId) as RunRow | undefined;
+      .all(mondeId, monId) as RunRow[];
 
-    return row ? this.fromRow(row) : undefined;
+    return rows.map((row) => this.fromRow(row));
+  }
+
+  getActiveForMon(mondeId: string, monId: string): RunRecord | undefined {
+    return this.listActiveForMon(mondeId, monId)[0];
   }
 
   getOldestQueuedForMon(mondeId: string, monId: string): RunRecord | undefined {

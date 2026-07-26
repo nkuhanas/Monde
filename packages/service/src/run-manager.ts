@@ -20,6 +20,7 @@ import { resolveRunScope, type RunScopeSnapshot } from "./scope.js";
 import type { MonRepository } from "./repositories/mons.js";
 import type { MondeRepository } from "./repositories/mondes.js";
 import type { PlanRepository, PlanAssignmentStatus } from "./repositories/plans.js";
+import type { ProcessSlotRepository } from "./repositories/process-slots.js";
 import type { RunRepository } from "./repositories/runs.js";
 import type { ArtifactRepository } from "./repositories/artifacts.js";
 import type { LogRepository } from "./repositories/logs.js";
@@ -43,6 +44,7 @@ export interface StartRunResult {
   run: RunRecord;
   started: boolean;
   active_run_id?: string;
+  active_run_ids?: string[];
 }
 
 export interface HitlThreadResponseResult {
@@ -94,6 +96,7 @@ export class RunManager {
       mondes: MondeRepository;
       mons: MonRepository;
       plans?: PlanRepository;
+      processSlots?: ProcessSlotRepository;
       runs: RunRepository;
       logs: LogRepository;
       artifacts: ArtifactRepository;
@@ -117,11 +120,6 @@ export class RunManager {
       throw new Error(`Run ${run.id} cannot be started from status ${run.status}.`);
     }
 
-    const active = this.deps.runs.getActiveForMon(run.monde_id, run.mon_id);
-    if (active && active.id !== run.id) {
-      return { run, started: false, active_run_id: active.id };
-    }
-
     const monde = this.deps.mondes.get(run.monde_id);
     const mon = this.deps.mons.get(run.monde_id, run.mon_id);
     if (!monde || !mon) {
@@ -129,6 +127,25 @@ export class RunManager {
     }
 
     const baseScope = resolveRunScope(monde, mon);
+    const oldestQueued = this.deps.runs.getOldestQueuedForMon(run.monde_id, run.mon_id);
+    if (run.status === "queued" && oldestQueued && oldestQueued.id !== run.id) {
+      return { run, started: false };
+    }
+    const reservation = this.deps.processSlots?.reserve({
+      runId: run.id,
+      mondeId: run.monde_id,
+      monId: run.mon_id,
+      kind: "one_shot",
+      limit: baseScope.mon_json.max_active_runs
+    }) ?? { reserved: true, activeRunIds: [] };
+    if (!reservation.reserved) {
+      return {
+        run,
+        started: false,
+        active_run_id: reservation.activeRunIds[0],
+        active_run_ids: reservation.activeRunIds
+      };
+    }
     const harnessOverride = typeof run.execution.harness_override === "string" ? run.execution.harness_override : undefined;
     const scope = harnessOverride ? { ...baseScope, harness: harnessOverride } : baseScope;
     const adapter = getHarnessAdapter(scope.harness);
@@ -261,6 +278,21 @@ export class RunManager {
     const adapterDetection = adapter?.detect();
     if (!adapter || !adapterDetection?.available) {
       throw new Error(`${adapter?.label ?? scope.harness} adapter is not available: ${adapterDetection?.reason ?? "missing or unsupported"}`);
+    }
+    if (this.hitlActivities.has(run.id)) {
+      throw new Error(`Run ${run.id} already has an active HITL adapter turn.`);
+    }
+    const reservation = this.deps.processSlots?.reserve({
+      runId: run.id,
+      mondeId: run.monde_id,
+      monId: run.mon_id,
+      kind: "hitl_turn",
+      limit: baseScope.mon_json.max_active_runs
+    }) ?? { reserved: true, activeRunIds: [] };
+    if (!reservation.reserved) {
+      throw new Error(
+        `Mon ${run.mon_id} has no free process slot; active runs: ${reservation.activeRunIds.join(", ")}`
+      );
     }
 
     const runToken = createRunToken();
@@ -411,6 +443,11 @@ export class RunManager {
         settled = true;
         this.clearHitlActivity(input.runId);
         this.revokeRunToken(input.runId);
+        const completedRun = this.deps.runs.get(input.runId);
+        this.deps.processSlots?.release(input.runId);
+        if (completedRun) {
+          void this.dispatchQueuedForMon(completedRun.monde_id, completedRun.mon_id);
+        }
         if (kind === "resolve") {
           resolve(value as { stdout: string; stderr: string; exit: { code: number | null; signal: NodeJS.Signals | null } });
         } else {
@@ -524,7 +561,8 @@ export class RunManager {
       if (running.stalePoll) {
         clearInterval(running.stalePoll);
       }
-      this.running.delete(runId);
+    } else {
+      this.deps.processSlots?.release(runId);
     }
 
     this.finalizeWriteEvidence(runId);
@@ -556,6 +594,7 @@ export class RunManager {
   cancelRun(runId: string): RunRecord {
     const run = this.requireRun(runId);
     this.deps.runs.updateLifecycle(runId, cancelQueuedRun(run));
+    this.deps.processSlots?.release(runId);
     this.revokeRunToken(runId);
     this.deps.events.publish(runId, "run_finished", {
       run_id: runId,
@@ -564,7 +603,27 @@ export class RunManager {
       outcome: "canceled"
     });
     this.updatePlanAssignmentForRun(this.requireRun(runId), "canceled");
+    void this.dispatchQueuedForMon(run.monde_id, run.mon_id);
     return this.requireRun(runId);
+  }
+
+  async dispatchQueuedForMon(mondeId: string, monId: string): Promise<RunRecord[]> {
+    const started: RunRecord[] = [];
+    if (typeof this.deps.runs.getOldestQueuedForMon !== "function") {
+      return started;
+    }
+    while (true) {
+      const queued = this.deps.runs.getOldestQueuedForMon(mondeId, monId);
+      if (!queued) {
+        break;
+      }
+      const result = await this.startRun(queued.id);
+      if (!result.started) {
+        break;
+      }
+      started.push(result.run);
+    }
+    return started;
   }
 
   isRunTokenAuthorized(runId: string, token: string): boolean {
@@ -726,6 +785,7 @@ export class RunManager {
         outcome: "interrupted"
       });
     }
+    this.deps.processSlots?.releaseOrphans();
   }
 
   private handleProcessExit(runId: string, exit: { code: number | null; signal: NodeJS.Signals | null }): void {
@@ -736,7 +796,12 @@ export class RunManager {
     this.running.delete(runId);
 
     const current = this.deps.runs.get(runId);
-    if (!current || current.status === "finished") {
+    this.deps.processSlots?.release(runId);
+    if (!current) {
+      return;
+    }
+    if (current.status === "finished") {
+      void this.dispatchQueuedForMon(current.monde_id, current.mon_id);
       return;
     }
 
@@ -757,6 +822,7 @@ export class RunManager {
       outcome: finished.outcome
     });
     this.updatePlanAssignmentForRun(finished, planAssignmentStatusForRun(finished));
+    void this.dispatchQueuedForMon(finished.monde_id, finished.mon_id);
   }
 
   private handleProcessError(runId: string, error: Error): void {
@@ -766,6 +832,7 @@ export class RunManager {
     }
     this.running.delete(runId);
     const current = this.deps.runs.get(runId);
+    this.deps.processSlots?.release(runId);
     if (!current || current.status === "finished") {
       return;
     }
@@ -786,6 +853,7 @@ export class RunManager {
       outcome: finished.outcome
     });
     this.updatePlanAssignmentForRun(finished, "blocked");
+    void this.dispatchQueuedForMon(finished.monde_id, finished.mon_id);
   }
 
   private finalizeWriteEvidence(runId: string): void {

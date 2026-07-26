@@ -39,6 +39,7 @@ export function createMon(directoryName: string, options: MonCreateOptions): voi
     default_harness: options.harness ?? null,
     default_model: options.model ?? null,
     work_root: "..",
+    max_active_runs: 1,
     capabilities: [],
     created_at: new Date().toISOString(),
     created_under_monde_id: mondeId
