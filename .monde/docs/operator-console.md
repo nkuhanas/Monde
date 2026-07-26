@@ -9,16 +9,22 @@ are doing it, and what evidence they produced.
 Current layout:
 
 ```text
-left sidebar       machine -> Monde hierarchy
+left sidebar       local machine -> Monde hierarchy
 top tabs           Overview, Runs, Mons, Plans, Cron, Artifacts, Status, Review
 main surface       selected tab content
 bottom rail        human-in-the-loop mon chat launcher and thread widgets
 overlay layer      reusable confirmation prompts
 ```
 
-The sidebar is grouped by machine first, then Monde. The current grouping is
-presentation data until machine inventory is implemented. Monde names, not mon
-names, are shown under each machine.
+The sidebar currently has one `Local Machine` group containing every Monde
+registered with the local service. It does not infer machine identity from a
+Monde ID, name, root path, or Mon names.
+
+Real multi-machine grouping is deferred until Monde has authenticated machine
+inventory plus CI/CD and deployment identity. At that point the service should
+provide machine records explicitly; the frontend must not invent remote
+machines from naming conventions. Monde names, not Mon names, are shown under
+each machine.
 
 ## Overview
 

@@ -122,7 +122,7 @@ export function App() {
   const warningRuns = runs.filter((run) => run.warnings?.length);
   const pendingReviews = runs.filter((run) => run.status === "finished" && run.outcome === "unknown").length;
   const healthLabel = health?.ok ? "Healthy" : health ? "Needs attention" : "Checking";
-  // TODO: replace deterministic grouping when the service exposes machine inventory.
+  // TODO: replace the local-only group when the service exposes authenticated machine inventory.
   const machineGroups = useMemo(() => buildSidebarMachines(mondes, health), [health, mondes]);
   const sectorCards = useMemo<SectorCardModel[]>(
     () => [
