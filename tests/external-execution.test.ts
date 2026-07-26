@@ -51,6 +51,7 @@ function create(
     digest?: string;
     predecessorKey?: string;
     lineage?: unknown;
+    completionPolicy?: "process_exit" | "external_receipt";
   }
 ) {
   return executions.createOrGet({
@@ -60,6 +61,7 @@ function create(
     run: run(input.runId),
     externalScope: "persona:1",
     externalContext: { queue: "q1" },
+    completionPolicy: input.completionPolicy,
     externalLineage: input.lineage,
     predecessorExternalKey: input.predecessorKey
   });
@@ -138,6 +140,31 @@ test("phase and outcome remain separate through clean exit and idempotent comple
     () => executions.recordCompletion({ id: execution.id, digest: "f".repeat(64), receipt }),
     (error) => error instanceof ExternalExecutionConflictError && error.code === "completion_conflict"
   );
+});
+
+test("process-exit completion succeeds cleanly without a receipt or manifest", (t) => {
+  const { executions } = fixture(t);
+  const execution = create(executions, {
+    runId: "run_process_exit",
+    key: "queue:process-exit",
+    completionPolicy: "process_exit"
+  }).execution;
+  executions.updatePhase(execution.id, "starting");
+  executions.updatePhase(execution.id, "active");
+
+  const exited = executions.recordProcessExit(
+    execution.id,
+    { code: 0, signal: null },
+    86400,
+    "2026-01-01T00:01:00.000Z"
+  );
+
+  assert.equal(exited.completion_policy, "process_exit");
+  assert.equal(exited.phase, "terminal");
+  assert.equal(exited.outcome, "succeeded");
+  assert.equal(exited.completion_digest, null);
+  assert.equal(exited.completion_manifest_id, null);
+  assert.equal(exited.completion_deadline_at, null);
 });
 
 test("completion before exit succeeds only after a clean exit", (t) => {

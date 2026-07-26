@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { nanoid } from "nanoid";
 import type {
+  ExternalExecutionCompletionPolicy,
   ExternalCancellationState,
   ExternalExecutionOutcome,
   ExternalExecutionPhase,
@@ -16,6 +17,7 @@ export interface ExternalExecutionRecord {
   run_id: string;
   monde_id: string;
   mon_id: string;
+  completion_policy: ExternalExecutionCompletionPolicy;
   external_scope: unknown;
   external_context: unknown;
   artifact_sink_ref?: unknown;
@@ -65,6 +67,7 @@ export class ExternalExecutionRepository {
     run: RunRecord;
     externalScope: unknown;
     externalContext: unknown;
+    completionPolicy?: ExternalExecutionCompletionPolicy;
     artifactSinkRef?: unknown;
     externalLineage?: unknown;
     predecessorIntegrationId?: string;
@@ -78,6 +81,15 @@ export class ExternalExecutionRepository {
         if (existing.request_digest !== input.requestDigest) {
           throw new ExternalExecutionConflictError(
             `External execution key ${input.integrationId}/${input.externalExecutionKey} already has a different digest.`,
+            "digest_conflict"
+          );
+        }
+        if (
+          input.completionPolicy !== undefined &&
+          existing.completion_policy !== input.completionPolicy
+        ) {
+          throw new ExternalExecutionConflictError(
+            `External execution key ${input.integrationId}/${input.externalExecutionKey} already uses completion policy ${existing.completion_policy}.`,
             "digest_conflict"
           );
         }
@@ -96,11 +108,13 @@ export class ExternalExecutionRepository {
         .prepare(
           `INSERT INTO external_executions (
              id, integration_id, external_execution_key, request_digest, run_id, monde_id, mon_id,
+             completion_policy,
              external_scope_json, external_context_json, artifact_sink_ref_json, external_lineage_json,
              predecessor_integration_id, predecessor_external_key, local_predecessor_run_id,
              phase, outcome, condition, cancellation_state, created_at, updated_at
            ) VALUES (
              @id, @integration_id, @external_execution_key, @request_digest, @run_id, @monde_id, @mon_id,
+             @completion_policy,
              @external_scope_json, @external_context_json, @artifact_sink_ref_json, @external_lineage_json,
              @predecessor_integration_id, @predecessor_external_key, @local_predecessor_run_id,
              'queued', NULL, NULL, 'none', @created_at, @updated_at
@@ -114,6 +128,7 @@ export class ExternalExecutionRepository {
           run_id: input.run.id,
           monde_id: input.run.monde_id,
           mon_id: input.run.mon_id,
+          completion_policy: input.completionPolicy ?? "external_receipt",
           external_scope_json: JSON.stringify(input.externalScope),
           external_context_json: JSON.stringify(input.externalContext),
           artifact_sink_ref_json: input.artifactSinkRef === undefined ? null : JSON.stringify(input.artifactSinkRef),
@@ -179,16 +194,17 @@ export class ExternalExecutionRepository {
 
       const cancellation = current.cancellation_state === "requested" || current.cancellation_state === "signalled";
       const clean = exit.code === 0 && !exit.signal;
+      const processExitSuccess = clean && current.completion_policy === "process_exit";
       const phase: ExternalExecutionPhase = cancellation
         ? "terminal"
-        : clean && current.completion_digest
+        : processExitSuccess || (clean && current.completion_digest)
           ? "terminal"
           : clean
             ? "awaiting_completion"
             : "terminal";
       const outcome: ExternalExecutionOutcome = cancellation
         ? "cancelled"
-        : clean && current.completion_digest
+        : processExitSuccess || (clean && current.completion_digest)
           ? "succeeded"
           : clean
             ? null
@@ -200,7 +216,7 @@ export class ExternalExecutionRepository {
           : exit.signal
             ? "process_interrupted"
             : "process_exit_nonzero";
-      const deadline = clean && !current.completion_digest
+      const deadline = clean && current.completion_policy === "external_receipt" && !current.completion_digest
         ? new Date(Date.parse(now) + recoveryWindowSeconds * 1000).toISOString()
         : null;
       this.db
@@ -461,6 +477,7 @@ interface ExternalExecutionRow {
   run_id: string;
   monde_id: string;
   mon_id: string;
+  completion_policy: ExternalExecutionCompletionPolicy;
   external_scope_json: string;
   external_context_json: string;
   artifact_sink_ref_json: string | null;
@@ -496,6 +513,7 @@ function fromRow(row: ExternalExecutionRow): ExternalExecutionRecord {
     run_id: row.run_id,
     monde_id: row.monde_id,
     mon_id: row.mon_id,
+    completion_policy: row.completion_policy,
     external_scope: JSON.parse(row.external_scope_json),
     external_context: JSON.parse(row.external_context_json),
     artifact_sink_ref: row.artifact_sink_ref_json ? JSON.parse(row.artifact_sink_ref_json) : undefined,

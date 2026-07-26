@@ -278,6 +278,7 @@ export type ExternalExecutionPhase =
   | "terminal";
 
 export type ExternalExecutionOutcome = "succeeded" | "failed" | "cancelled" | null;
+export type ExternalExecutionCompletionPolicy = "process_exit" | "external_receipt";
 export type ExternalCancellationState =
   | "none"
   | "requested"
@@ -294,6 +295,7 @@ export interface ExternalExecutionDto {
   run_id: string;
   monde_id: string;
   mon_id: string;
+  completion_policy: ExternalExecutionCompletionPolicy;
   phase: ExternalExecutionPhase;
   outcome: ExternalExecutionOutcome;
   condition: string | null;
@@ -310,6 +312,15 @@ export interface ExternalExecutionDto {
   cancellation_acknowledged_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface IntegrationRunSnapshotDto {
+  run_id: string;
+  execution_key: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+  started_at?: string;
+  finished_at?: string;
+  failure_code?: string;
 }
 
 export type ExecutionManifestAvailability = "available" | "deleted" | "expired";

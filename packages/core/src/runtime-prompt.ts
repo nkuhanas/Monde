@@ -60,6 +60,7 @@ export function buildRuntimePrompt(
     : [];
   const readMounts = Array.isArray(scopeSnapshot.read_mounts) ? scopeSnapshot.read_mounts.map(String) : [];
   const canWrite = run.execution?.can_write === true;
+  const processExitCompletion = run.execution?.completion_policy === "process_exit";
   const sandboxMode = typeof run.execution?.sandbox_mode === "string" ? run.execution.sandbox_mode : "unknown";
   const writeScope = typeof run.execution?.write_scope === "string" ? run.execution.write_scope : "not advertised";
   const capabilities = Array.isArray(scopeSnapshot.capabilities)
@@ -125,7 +126,9 @@ export function buildRuntimePrompt(
     "Use runtime_scope() when uncertain about identity, roots, warnings, or current run state.",
     "Write concise logs for decisions, milestones, and blockers.",
     "Register important produced files as artifacts.",
-    "A clean process exit does not imply semantic success; outcome may remain unknown until reviewed.",
+    processExitCompletion
+      ? "For this integration run, a clean acknowledged process exit is generic execution success; the integration owns any domain validation afterward."
+      : "A clean process exit does not imply semantic success; outcome may remain unknown until reviewed.",
     capabilities.length ? `Advisory capabilities declared by this mon: ${capabilities.join(", ")}` : "No advisory capabilities are declared by this mon."
     ,
     ...(actorContextFiles.length

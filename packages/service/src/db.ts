@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 
-export const schemaVersion = 11;
+export const schemaVersion = 12;
 
 export interface MondeDatabase {
   db: DatabaseSync;
@@ -436,6 +436,13 @@ export function migrateDatabase(db: DatabaseSync): void {
 
         CREATE INDEX IF NOT EXISTS cron_fires_schedule_idx
           ON cron_fires(cron_id, fired_at);
+      `);
+    }
+
+    if (current < 12) {
+      db.exec(`
+        ALTER TABLE external_executions
+          ADD COLUMN completion_policy TEXT NOT NULL DEFAULT 'external_receipt';
       `);
     }
 

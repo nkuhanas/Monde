@@ -4,13 +4,20 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import {
+  canonicalJson,
+  canonicalSha256,
   ExternalMcpServerSchema,
   finishRunFromExit,
   MonConfigSchema,
   resolveWorkRoot
 } from "@monde/core";
-import { canonicalSha256 } from "@monde/core";
-import type { BackupInfoDto, BackupMetadataDto, DoctorFindingDto, MonConfig } from "@monde/core";
+import type {
+  BackupInfoDto,
+  BackupMetadataDto,
+  DoctorFindingDto,
+  IntegrationRunSnapshotDto,
+  MonConfig
+} from "@monde/core";
 import type { RunCloseReason, RunRecord } from "@monde/core";
 import { harnessAdapters } from "@monde/adapters";
 import type { ServiceAuth } from "./auth.js";
@@ -18,7 +25,8 @@ import { ArtifactRepository } from "./repositories/artifacts.js";
 import { CronScheduleRepository } from "./repositories/cron-schedules.js";
 import {
   ExternalExecutionConflictError,
-  ExternalExecutionRepository
+  ExternalExecutionRepository,
+  type ExternalExecutionRecord
 } from "./repositories/external-executions.js";
 import { ExternalMcpGrantRepository } from "./repositories/external-mcp-grants.js";
 import {
@@ -221,6 +229,59 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
   } = deps;
   const logs = new LogRepository(deps.database.db);
   const artifacts = new ArtifactRepository(deps.database.db);
+  const reserveExternalRun = async (input: {
+    integrationId: string;
+    externalExecutionKey: string;
+    requestDigest: string;
+    run: RunRecord;
+    externalScope: unknown;
+    externalContext: unknown;
+    completionPolicy: "process_exit" | "external_receipt";
+    artifactSinkRef?: unknown;
+    externalLineage?: unknown;
+    predecessorIntegrationId?: string;
+    predecessorExternalKey?: string;
+  }) => {
+    const reserved = externalExecutions.createOrGet({
+      integrationId: input.integrationId,
+      externalExecutionKey: input.externalExecutionKey,
+      requestDigest: input.requestDigest,
+      run: input.run,
+      externalScope: input.externalScope,
+      externalContext: input.externalContext,
+      completionPolicy: input.completionPolicy,
+      artifactSinkRef: input.artifactSinkRef,
+      externalLineage: input.externalLineage,
+      predecessorIntegrationId: input.predecessorIntegrationId,
+      predecessorExternalKey: input.predecessorExternalKey
+    });
+    if (reserved.created) {
+      try {
+        await runManager.dispatchQueuedForMon(input.run.monde_id, input.run.mon_id);
+      } catch (error) {
+        externalExecutions.markFailedByRun(reserved.execution.run_id, "configuration_error");
+        runs.updateLifecycle(reserved.execution.run_id, {
+          status: "finished",
+          process_status: "not_started",
+          outcome: "failed",
+          runtime_state: "failed",
+          outcome_state: "failed",
+          close_reason: "error",
+          ended_at: new Date().toISOString(),
+          closed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+        eventBus.publish(reserved.execution.run_id, "external_execution_start_failed", {
+          run_id: reserved.execution.run_id,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+    return {
+      execution: externalExecutions.get(reserved.execution.id)!,
+      created: reserved.created
+    };
+  };
   app.get("/health", async () => ({
     ok: true,
     service: "monde",
@@ -645,6 +706,134 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     return { run };
   });
 
+  app.post("/mondes/:mondeId/integrations/:integrationId/runs", async (request, reply) => {
+    const params = z
+      .object({
+        mondeId: z.string().min(1),
+        integrationId: z.string().min(1).max(128)
+      })
+      .parse(request.params);
+    const body = z
+      .object({
+        execution_key: z.string().min(1).max(512),
+        mon_id: z.string().min(1),
+        context_packet: RequiredJsonValueSchema,
+        harness_override: z.string().min(1).max(128).optional()
+      })
+      .strict()
+      .parse(request.body);
+    if (!mondes.get(params.mondeId) || !mons.get(params.mondeId, body.mon_id)) {
+      return reply.code(404).send({ error: "execution_target_not_found" });
+    }
+    try {
+      assertCanonicalSize(body.context_packet, 64 * 1024, "context_packet");
+    } catch (error) {
+      return reply.code(422).send({
+        error: "payload_too_large",
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+
+    const digestPayload = {
+      integration_id: params.integrationId,
+      external_execution_key: body.execution_key,
+      monde_id: params.mondeId,
+      mon_id: body.mon_id,
+      context_packet: body.context_packet,
+      ...(body.harness_override ? { harness_override: body.harness_override } : {})
+    };
+    const requestDigest = canonicalSha256(digestPayload);
+    const contextPacketDigest = canonicalSha256(body.context_packet);
+    const run = createExternalRun({
+      integrationId: params.integrationId,
+      externalExecutionKey: body.execution_key,
+      mondeId: params.mondeId,
+      monId: body.mon_id,
+      prompt: integrationContextPrompt(body.context_packet),
+      completionPolicy: "process_exit",
+      contextPacketDigest,
+      harnessOverride: body.harness_override
+    });
+
+    try {
+      const reserved = await reserveExternalRun({
+        integrationId: params.integrationId,
+        externalExecutionKey: body.execution_key,
+        requestDigest,
+        run,
+        externalScope: null,
+        externalContext: body.context_packet,
+        completionPolicy: "process_exit"
+      });
+      const execution = reserved.execution;
+      const persistedRun = runs.get(execution.run_id)!;
+      return reply.code(reserved.created ? 201 : 200).send({
+        snapshot: integrationRunSnapshot(execution, persistedRun),
+        run: persistedRun,
+        context_packet_digest: canonicalSha256(execution.external_context),
+        created: reserved.created
+      });
+    } catch (error) {
+      if (error instanceof ExternalExecutionConflictError) {
+        return reply.code(409).send({ error: error.code, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get(
+    "/mondes/:mondeId/integrations/:integrationId/runs/:executionKey",
+    async (request, reply) => {
+      const params = z
+        .object({
+          mondeId: z.string().min(1),
+          integrationId: z.string().min(1).max(128),
+          executionKey: z.string().min(1).max(512)
+        })
+        .parse(request.params);
+      const execution = externalExecutions.getByKey(params.integrationId, params.executionKey);
+      if (!execution || execution.monde_id !== params.mondeId) {
+        return reply.code(404).send({ error: "integration_run_not_found" });
+      }
+      const run = runs.get(execution.run_id)!;
+      return {
+        snapshot: integrationRunSnapshot(execution, run),
+        run,
+        context_packet_digest: canonicalSha256(execution.external_context)
+      };
+    }
+  );
+
+  app.post(
+    "/mondes/:mondeId/integrations/:integrationId/runs/:executionKey/cancel",
+    async (request, reply) => {
+      const params = z
+        .object({
+          mondeId: z.string().min(1),
+          integrationId: z.string().min(1).max(128),
+          executionKey: z.string().min(1).max(512)
+        })
+        .parse(request.params);
+      const current = externalExecutions.getByKey(params.integrationId, params.executionKey);
+      if (!current || current.monde_id !== params.mondeId) {
+        return reply.code(404).send({ error: "integration_run_not_found" });
+      }
+      try {
+        const execution = runManager.cancelExternalExecution(current.id);
+        const run = runs.get(execution.run_id)!;
+        return {
+          snapshot: integrationRunSnapshot(execution, run),
+          run
+        };
+      } catch (error) {
+        if (error instanceof ExternalExecutionConflictError) {
+          return reply.code(409).send({ error: error.code, message: error.message });
+        }
+        throw error;
+      }
+    }
+  );
+
   app.post("/external-executions", async (request, reply) => {
     const body = z
       .object({
@@ -687,43 +876,30 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       return reply.code(422).send({ error: "request_digest_mismatch", computed_digest: computedDigest });
     }
 
-    const run = createExternalRun(body);
+    const run = createExternalRun({
+      integrationId: body.integration_id,
+      externalExecutionKey: body.external_execution_key,
+      mondeId: body.monde_id,
+      monId: body.mon_id,
+      prompt: body.input.prompt,
+      completionPolicy: "external_receipt",
+      harnessOverride: body.harness_override
+    });
     try {
-      const reserved = externalExecutions.createOrGet({
+      const reserved = await reserveExternalRun({
         integrationId: body.integration_id,
         externalExecutionKey: body.external_execution_key,
         requestDigest: body.request_digest,
         run,
         externalScope: body.external_scope,
         externalContext: body.external_context,
+        completionPolicy: "external_receipt",
         artifactSinkRef: body.artifact_sink_ref,
         externalLineage: body.external_lineage,
         predecessorIntegrationId: body.predecessor?.integration_id,
         predecessorExternalKey: body.predecessor?.external_execution_key
       });
-      if (reserved.created) {
-        try {
-          await runManager.dispatchQueuedForMon(body.monde_id, body.mon_id);
-        } catch (error) {
-          externalExecutions.markFailedByRun(reserved.execution.run_id, "configuration_error");
-          runs.updateLifecycle(reserved.execution.run_id, {
-            status: "finished",
-            process_status: "not_started",
-            outcome: "failed",
-            runtime_state: "failed",
-            outcome_state: "failed",
-            close_reason: "error",
-            ended_at: new Date().toISOString(),
-            closed_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          });
-          eventBus.publish(reserved.execution.run_id, "external_execution_start_failed", {
-            run_id: reserved.execution.run_id,
-            error: error instanceof Error ? error.message : String(error)
-          });
-        }
-      }
-      const execution = externalExecutions.get(reserved.execution.id)!;
+      const execution = reserved.execution;
       return reply.code(reserved.created ? 201 : 200).send({
         execution,
         run: runs.get(execution.run_id),
@@ -1761,18 +1937,20 @@ function createOperatorRun(
 }
 
 function createExternalRun(body: {
-  integration_id: string;
-  external_execution_key: string;
-  monde_id: string;
-  mon_id: string;
-  input: { kind: "prompt"; prompt: string };
-  harness_override?: string;
+  integrationId: string;
+  externalExecutionKey: string;
+  mondeId: string;
+  monId: string;
+  prompt: string;
+  completionPolicy: "process_exit" | "external_receipt";
+  contextPacketDigest?: string;
+  harnessOverride?: string;
 }): RunRecord {
   const now = new Date().toISOString();
   return {
     id: `run_${nanoid(10)}`,
-    monde_id: body.monde_id,
-    mon_id: body.mon_id,
+    monde_id: body.mondeId,
+    mon_id: body.monId,
     status: "queued",
     process_status: "not_started",
     outcome: "unknown",
@@ -1783,21 +1961,65 @@ function createExternalRun(body: {
     warnings: [],
     origin: {
       type: "system",
-      label: `external:${body.integration_id}:${body.external_execution_key}`
+      label: `external:${body.integrationId}:${body.externalExecutionKey}`
     },
     intent: {
-      title: `External execution ${body.external_execution_key}`,
-      prompt: body.input.prompt
+      title: `External execution ${body.externalExecutionKey}`,
+      prompt: body.prompt
     },
     execution: {
       externally_managed: true,
-      integration_id: body.integration_id,
-      external_execution_key: body.external_execution_key,
-      ...(body.harness_override ? { harness_override: body.harness_override } : {})
+      integration_id: body.integrationId,
+      external_execution_key: body.externalExecutionKey,
+      completion_policy: body.completionPolicy,
+      ...(body.contextPacketDigest ? { context_packet_digest: body.contextPacketDigest } : {}),
+      ...(body.harnessOverride ? { harness_override: body.harnessOverride } : {})
     },
     result: {},
     created_at: now,
     updated_at: now
+  };
+}
+
+function integrationContextPrompt(contextPacket: unknown): string {
+  return [
+    "Execute this integration run using the configured MCP tools.",
+    "Monde forwards the following bounded context packet opaquely and does not interpret its fields.",
+    "",
+    canonicalJson(contextPacket)
+  ].join("\n");
+}
+
+function integrationRunSnapshot(
+  execution: ExternalExecutionRecord,
+  run: RunRecord
+): IntegrationRunSnapshotDto {
+  let status: IntegrationRunSnapshotDto["status"];
+  if (execution.phase === "terminal") {
+    status = execution.outcome ?? "failed";
+  } else if (execution.phase === "queued" || execution.phase === "starting") {
+    status = "pending";
+  } else {
+    status = "running";
+  }
+
+  return {
+    run_id: execution.run_id,
+    execution_key: execution.external_execution_key,
+    status,
+    ...(run.started_at ? { started_at: run.started_at } : {}),
+    ...(execution.phase === "terminal"
+      ? {
+          finished_at:
+            execution.process_exited_at ??
+            execution.cancellation_acknowledged_at ??
+            run.ended_at ??
+            execution.updated_at
+        }
+      : {}),
+    ...(status === "failed" && execution.condition
+      ? { failure_code: execution.condition }
+      : {})
   };
 }
 
