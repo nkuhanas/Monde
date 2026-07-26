@@ -63,6 +63,7 @@ export class BasicProcessRunner implements HarnessRunner {
       scopeSnapshot: input.scope as unknown as Record<string, unknown>
     });
     const stdoutFilter = command.outputMode === "codex-json-filtered" ? new CodexJsonOutputFilter() : undefined;
+    const processGroup = process.platform !== "win32";
     const child = spawn(command.command, command.args, {
       cwd: command.cwd,
       env: buildHarnessEnvironment({
@@ -84,6 +85,7 @@ export class BasicProcessRunner implements HarnessRunner {
         COLUMNS: process.env.COLUMNS || "120",
         LINES: process.env.LINES || "32"
       }),
+      detached: processGroup,
       stdio: "pipe"
     });
 
@@ -112,7 +114,13 @@ export class BasicProcessRunner implements HarnessRunner {
       child.stdin.end();
     }
 
-    return new ChildRunningProcess(input.runId, child, runnerType, command.stdinMode !== "closed");
+    return new ChildRunningProcess(
+      input.runId,
+      child,
+      runnerType,
+      command.stdinMode !== "closed",
+      processGroup
+    );
   }
 }
 
@@ -157,7 +165,8 @@ class ChildRunningProcess implements RunningProcess {
     readonly runId: string,
     private readonly child: ChildProcessWithoutNullStreams,
     readonly runnerType: "basic-process" | "pty" | "adapter-native",
-    private readonly acceptsInput: boolean
+    private readonly acceptsInput: boolean,
+    private readonly processGroup: boolean
   ) {
     this.pid = child.pid;
   }
@@ -171,6 +180,16 @@ class ChildRunningProcess implements RunningProcess {
   }
 
   kill(signal: NodeJS.Signals = "SIGTERM"): void {
+    if (this.processGroup && this.pid) {
+      try {
+        process.kill(-this.pid, signal);
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") {
+          return;
+        }
+      }
+    }
     this.child.kill(signal);
   }
 }
