@@ -105,11 +105,22 @@ Closing a server-backed bottom chat thread:
 
 ```text
 runtime_state = closed
-outcome_state = unknown
 close_reason = user_closed_widget
+
+clean final runtime state:
+  outcome = completed
+  outcome_state = succeeded
+
+unresolved final error or timeout:
+  outcome = unknown
+  outcome_state = unknown
 ```
 
-The web UI prompts before closing a server-backed thread.
+The web UI prompts before closing a server-backed thread. Threads have no
+task-level success criterion, so a clean close is successful conversation
+lifecycle rather than an operator-reviewed task result. A later successful
+turn clears an earlier transient turn error for this decision; the event
+history remains durable evidence.
 
 ## Queue Semantics
 

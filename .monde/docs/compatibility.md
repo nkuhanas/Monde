@@ -1,6 +1,6 @@
 # Compatibility And Migration
 
-The service database migrates forward to schema version 12 at startup. Startup
+The service database migrates forward to schema version 13 at startup. Startup
 still refuses a database whose schema is newer than the running service.
 
 ## Existing Mon Defaults
@@ -48,6 +48,11 @@ TeaParty-specific shapes.
 Schema 12 adds `completion_policy` to the generic external-execution ledger.
 Existing rows use `external_receipt`, preserving the previously shipped
 behavior. The narrow integration-run endpoint creates `process_exit` rows.
+
+Schema 13 reclassifies historical `user_closed_widget` HITL threads from
+`unknown` to `succeeded` only when their persisted final execution state has no
+unresolved chat error or timeout. Historical threads with an unresolved error
+remain reviewable; their event and log evidence is unchanged.
 
 ## Isolation Compatibility
 

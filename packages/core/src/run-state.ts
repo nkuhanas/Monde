@@ -203,6 +203,29 @@ export function cancelQueuedRun(run: RunLifecycleView, now = new Date().toISOStr
   };
 }
 
+export function closeHitlThreadLifecycle(
+  closeReason: RunCloseReason,
+  hasUnresolvedError: boolean,
+  now = new Date().toISOString()
+): RunLifecyclePatch {
+  const cleanWidgetClose = closeReason === "user_closed_widget" && !hasUnresolvedError;
+  const succeeded = closeReason === "user_marked_resolved" || cleanWidgetClose;
+  const failed = closeReason === "error";
+  const abandoned = closeReason === "user_abandoned";
+
+  return {
+    status: "finished",
+    process_status: closeReason === "system_cancelled" ? "killed" : "exited",
+    outcome: succeeded ? "completed" : failed ? "failed" : abandoned ? "stopped" : "unknown",
+    runtime_state: failed ? "failed" : closeReason === "system_cancelled" ? "cancelled" : "closed",
+    outcome_state: succeeded ? "succeeded" : failed ? "failed" : abandoned ? "abandoned" : "unknown",
+    close_reason: closeReason,
+    closed_at: now,
+    ended_at: now,
+    updated_at: now
+  };
+}
+
 export function addRunWarning(run: RunLifecycleView, warning: string): RunLifecyclePatch {
   if (run.warnings.includes(warning)) {
     return { warnings: run.warnings };

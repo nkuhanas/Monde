@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 
-export const schemaVersion = 12;
+export const schemaVersion = 13;
 
 export interface MondeDatabase {
   db: DatabaseSync;
@@ -443,6 +443,23 @@ export function migrateDatabase(db: DatabaseSync): void {
       db.exec(`
         ALTER TABLE external_executions
           ADD COLUMN completion_policy TEXT NOT NULL DEFAULT 'external_receipt';
+      `);
+    }
+
+    if (current < 13) {
+      db.exec(`
+        UPDATE runs
+           SET outcome = 'completed',
+               outcome_state = 'succeeded'
+         WHERE interaction_mode = 'hitl_thread'
+           AND status = 'finished'
+           AND process_status = 'exited'
+           AND runtime_state = 'closed'
+           AND close_reason = 'user_closed_widget'
+           AND outcome = 'unknown'
+           AND outcome_state = 'unknown'
+           AND COALESCE(json_extract(execution_json, '$.chat_last_error'), '') = ''
+           AND COALESCE(json_extract(execution_json, '$.hitl_timeout_reason'), '') = '';
       `);
     }
 

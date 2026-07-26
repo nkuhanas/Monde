@@ -7,6 +7,7 @@ import { z } from "zod";
 import {
   canonicalJson,
   canonicalSha256,
+  closeHitlThreadLifecycle,
   ExternalMcpServerSchema,
   finishRunFromExit,
   MonConfigSchema,
@@ -1552,7 +1553,10 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       reviewed_at: reviewedAt,
       notes: body.notes ?? run.result.notes
     };
-    runs.updateLifecycle(run.id, { outcome: body.outcome });
+    runs.updateLifecycle(run.id, {
+      outcome: body.outcome,
+      outcome_state: body.outcome === "completed" ? "succeeded" : body.outcome === "failed" ? "failed" : "abandoned"
+    });
     runs.updateResult(run.id, result);
     logs.append(
       run.id,
@@ -1589,7 +1593,10 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       reviewed_at: reviewedAt,
       notes: notes ?? run.result.notes
     };
-    runs.updateLifecycle(run.id, { outcome });
+    runs.updateLifecycle(run.id, {
+      outcome,
+      outcome_state: outcome === "completed" ? "succeeded" : outcome === "failed" ? "failed" : "abandoned"
+    });
     runs.updateResult(run.id, result);
     logs.append(
       run.id,
@@ -1609,37 +1616,27 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
 
   function closeHitlThread(run: RunRecord, closeReason: RunCloseReason): RunRecord {
     const now = new Date().toISOString();
-    const outcomeState =
-      closeReason === "user_marked_resolved" ? "succeeded" : closeReason === "user_abandoned" ? "abandoned" : closeReason === "error" ? "failed" : "unknown";
-    const outcome =
-      closeReason === "user_marked_resolved" ? "completed" : closeReason === "user_abandoned" ? "stopped" : closeReason === "error" ? "failed" : "unknown";
+    const hasUnresolvedError = hitlThreadHasUnresolvedError(run);
+    const lifecycle = closeHitlThreadLifecycle(closeReason, hasUnresolvedError, now);
 
-    runs.updateLifecycle(run.id, {
-      status: "finished",
-      process_status: closeReason === "system_cancelled" ? "killed" : "exited",
-      outcome,
-      runtime_state: closeReason === "error" ? "failed" : closeReason === "system_cancelled" ? "cancelled" : "closed",
-      outcome_state: outcomeState,
-      close_reason: closeReason,
-      closed_at: now,
-      ended_at: now,
-      updated_at: now
-    });
+    runs.updateLifecycle(run.id, lifecycle);
     logs.append(
       run.id,
       {
         type: "hitl_thread_closed",
         close_reason: closeReason,
-        runtime_state: closeReason === "error" ? "failed" : closeReason === "system_cancelled" ? "cancelled" : "closed",
-        outcome_state: outcomeState,
+        runtime_state: lifecycle.runtime_state,
+        outcome_state: lifecycle.outcome_state,
+        auto_completed: closeReason === "user_closed_widget" && lifecycle.outcome_state === "succeeded",
+        unresolved_error: hasUnresolvedError,
         closed_at: now
       },
       "audit"
     );
     eventBus.publish(run.id, "state_change", {
       run_id: run.id,
-      runtime_state: closeReason === "error" ? "failed" : closeReason === "system_cancelled" ? "cancelled" : "closed",
-      outcome_state: outcomeState,
+      runtime_state: lifecycle.runtime_state,
+      outcome_state: lifecycle.outcome_state,
       close_reason: closeReason
     });
     eventBus.publish(run.id, "system_message", {
@@ -1648,6 +1645,24 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       content: `Thread closed (${closeReason}).`
     });
     return runs.get(run.id)!;
+  }
+
+  function hitlThreadHasUnresolvedError(run: RunRecord): boolean {
+    const chatError = typeof run.execution.chat_last_error === "string"
+      ? run.execution.chat_last_error.trim()
+      : "";
+    const timeoutReason = typeof run.execution.hitl_timeout_reason === "string"
+      ? run.execution.hitl_timeout_reason.trim()
+      : "";
+
+    return chatError.length > 0 ||
+      timeoutReason.length > 0 ||
+      run.runtime_state === "failed" ||
+      run.outcome_state === "failed" ||
+      run.outcome === "failed" ||
+      run.outcome === "interrupted" ||
+      run.process_status === "crashed" ||
+      run.process_status === "lost";
   }
 
   app.post("/tools/:name", async (request, reply) => {

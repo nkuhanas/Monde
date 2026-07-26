@@ -127,7 +127,7 @@ The web backend and Vite UI use strict local-origin CORS.
 Operational state is stored in the platform Monde data directory using
 Node's built-in SQLite binding.
 
-The DB is currently schema version 12 and has ordered forward migrations.
+The DB is currently schema version 13 and has ordered forward migrations.
 Startup fails clearly if the DB schema is newer than the service schema.
 
 The service currently uses WAL and foreign keys:
