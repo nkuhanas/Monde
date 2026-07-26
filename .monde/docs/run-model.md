@@ -1,6 +1,7 @@
 # Run Model
 
-Plan, cron, operator, and system intent sources create runs.
+Plan, cron, external integration, operator, and system intent sources create
+runs.
 
 Runs produce typed logs, raw output events, path-referenced artifacts, and
 result summaries or review notes. A clean process exit does not automatically
@@ -110,22 +111,66 @@ The web UI prompts before closing a server-backed thread.
 
 ## Queue Semantics
 
-MVP invariant for one-shot runs:
+Existing Mon default:
 
 ```text
-one active process-backed run per mon
+max_active_runs = 1
+run_workspace.mode = shared
 ```
 
-If a mon is busy, new one-shot work queues unless the operator explicitly sends
-input to an active run that accepts input.
+The process-slot dispatcher supports a configurable number of active
+process-backed runs per Mon. Slot reservation is atomic in SQLite, the oldest
+runnable queued run goes first, and a freed slot triggers more dispatch.
+`max_active_runs > 1` requires isolated workspaces so concurrent processes do
+not mutate one shared work root.
+
+If every slot is occupied, new one-shot work queues unless the operator sends
+input to an active run that accepts input. Open HITL threads do not permanently
+occupy slots; their individual adapter turns do.
 
 `monde wake <mon>`:
 
-- attaches to active work when present
+- attaches to an active run when present
 - starts the oldest queued run when idle
 - creates a manual operator run when idle with no queue
 
 Queued plan/cron-origin starts should disclose origin before launch.
+
+## External Execution Lifecycle
+
+Generic integrations reserve a durable identity on
+`(integration_id, external_execution_key)`. The same canonical request digest
+returns the existing run; a different digest conflicts. This makes a lost HTTP
+response recoverable without launching duplicate work.
+
+The external projection separates placement, semantic outcome, and
+reconciliation detail:
+
+```text
+phase       queued | starting | active | awaiting_completion |
+            cancelling | terminal
+outcome     null | succeeded | failed | cancelled
+condition   missing_completion | process_exit_nonzero | process_lost | ...
+```
+
+A clean process exit enters `awaiting_completion`. Only an idempotent external
+completion receipt and/or an owned manifest can produce semantic success.
+Global retry attempt numbers and lineage are caller-owned opaque data; Monde
+resolves only a nullable local predecessor.
+
+Cancellation is also idempotent. Queued work terminates immediately; active
+work records request and signal delivery, waits for process acknowledgement,
+and distinguishes acknowledged, failed, and lost cancellation.
+
+## Cron Semantics
+
+A cron schedule produces ordinary one-shot runs with `origin.type = cron`.
+Timezone-aware five-field schedules coalesce missed fires to the latest due
+time and maintain at most one queued, starting, or active run per schedule.
+Archived schedules retain fire and run history.
+
+Cron is not a workflow or retry engine. The scheduled prompt, optional harness,
+and sandbox override are the complete activation contract.
 
 ## Evidence
 
@@ -134,6 +179,8 @@ Run evidence is attached directly to the run:
 - `run_events` for process output and HITL messages
 - typed logs for milestones/decisions/audit/review
 - artifacts for path-referenced outputs
+- immutable external-execution manifests for output hashes and staging
+  references
 - result summary/review fields
 
 The operator console Attention section surfaces active, warning-bearing,

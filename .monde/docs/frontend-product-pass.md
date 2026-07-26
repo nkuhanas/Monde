@@ -101,12 +101,17 @@ prioritize:
 
 Artifacts are path references in MVP, not blob storage.
 
+## Cron
+
+Cron has its own top-level operator surface. It lists generic Monde schedules,
+target Mons, timezone-aware expressions, next fires, enablement, and archive
+controls. Cron runs flow through the normal Runs and Review surfaces.
+
 ## Deferred Areas
 
 These should stay out of the current frontend polish path unless explicitly
 needed:
 
-- cron scheduler UI
 - opencode breadth
 - native PTY backend
 - import/restore

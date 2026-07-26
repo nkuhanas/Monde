@@ -1,7 +1,8 @@
 # MCP Run-Scoped Tools
 
-Monde exposes MCP over the local loopback MCP service and through
-`monde mcp bridge` for stdio-only harnesses.
+Monde exposes its built-in MCP server over the local loopback service and
+through `monde mcp bridge` for stdio-only harnesses. A Mon may also declare
+provider-neutral external MCP servers for Codex.
 
 Every MCP call must identify and authorize a run. Harnesses receive:
 
@@ -21,6 +22,8 @@ Current transports:
 
 - HTTP JSON-RPC to `http://127.0.0.1:3762/mcp`
 - stdio bridge via `monde mcp bridge`
+- external stdio servers declared in `mon.json`
+- external streamable-HTTP servers declared in `mon.json`
 
 The bridge accepts both newline-delimited JSON-RPC and
 Content-Length-framed JSON-RPC. Codex exec uses framed transport.
@@ -33,6 +36,42 @@ MONDE_ALLOW_BROWSER_MCP=1
 
 The web UI should use backend API endpoints, not browser MCP, unless there is a
 specific local development need.
+
+Codex receives both the reserved `monde` server and every declared external
+server. External IDs must be unique and cannot use the `monde` namespace.
+Servers may be required or optional and have bounded startup timeouts.
+
+## External Run Claims
+
+External servers may use `auth.type = run_claims`. Monde issues a separate
+random grant for each server and stores only its hash. The grant is not the
+local service token and is valid only while the run is starting or active.
+
+The server calls:
+
+```http
+POST /external-mcp/introspect
+Authorization: Bearer <server-specific-run-grant>
+```
+
+Claims include:
+
+```text
+run_id
+mon_id
+monde_id
+integration_id
+external_execution_key
+external_scope
+audience
+expires_at
+```
+
+Authenticated streamable-HTTP servers must use a loopback URL in v1 so they
+can reach the local introspection endpoint. An external stdio server receives
+only its declared token variable and introspection address. During isolated
+runs it is launched through bubblewrap with separate declarations for read
+mounts, actor-context access, and scratch read/write access.
 
 ## MVP Tools
 

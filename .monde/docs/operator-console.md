@@ -10,7 +10,7 @@ Current layout:
 
 ```text
 left sidebar       machine -> Monde hierarchy
-top tabs           Overview, Runs, Mons, Plans, Artifacts, Status, Review
+top tabs           Overview, Runs, Mons, Plans, Cron, Artifacts, Status, Review
 main surface       selected tab content
 bottom rail        human-in-the-loop mon chat launcher and thread widgets
 overlay layer      reusable confirmation prompts
@@ -54,6 +54,16 @@ Plans:
 - assignments
 - generated runs
 - evidence aggregated from linked runs
+
+Cron:
+
+- generic timezone-aware schedules owned by Monde
+- target Mon, prompt, harness/sandbox overrides, and next fire
+- enable/disable and archive controls
+- coalesced fire and generated-run history
+
+Cron creates ordinary runs. It does not represent TeaParty workflows, retries,
+or machine/model routing.
 
 Artifacts:
 

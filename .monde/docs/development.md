@@ -103,6 +103,11 @@ Focused security and backup regressions run with:
 npm test
 ```
 
+The suite covers process-slot concurrency, isolated scope snapshots and
+cleanup, external execution idempotency/lifecycle, external MCP grants and
+stdio containment, immutable manifests, cron coalescing/timezones, and backup
+rehearsal.
+
 The deterministic smoke gate builds once, does not invoke external agent
 providers, and runs each smoke independently:
 
@@ -128,7 +133,13 @@ deterministic gate:
 
 ```bash
 npm run smoke:external
+monde adapter verify-isolation codex
 ```
+
+The second command is the required release/manual gate before advertising the
+current Codex installation as isolation-capable. It runs a real sibling-access
+denial probe for Codex and an isolated stdio MCP child, then stores a local
+attestation bound to the relevant binary and host fingerprint.
 
 Smoke tests create temporary Monde roots and runtime state. They should not
 depend on the operator's active local SQLite DB.
@@ -178,11 +189,13 @@ monde doctor
 monde backup info
 monde backup create
 monde backup list
+monde backup verify <backup.sqlite>
+monde backup rehearse <backup.sqlite> --destination <new-directory>
 ```
 
 `doctor` and backup info print the DB path because the SQLite file is the
 source of local operational continuity. `backup create` uses SQLite's online
 backup operation, so it includes committed WAL state without requiring the
-service to stop. The focused test suite checks integrity and opens a copied
-backup as a restore rehearsal. Full import/export and an operator-facing
-restore command remain post-MVP.
+service to stop. Verification checks the recorded checksum, SQLite integrity,
+and foreign keys. Rehearsal restores only into the explicit new destination
+and never replaces the live DB. See `backup-restore.md`.

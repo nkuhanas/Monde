@@ -25,14 +25,35 @@ unless the mon explicitly sets `allow_external_work_root: true`. This check
 covers relative traversal, absolute paths, and symlink targets and is repeated
 for each run start.
 
-The resulting scope is an authorization input and adapter configuration. Its
-enforcement depends on the harness:
+The resulting scope is an authorization input and adapter configuration. Shared
+and isolated runs have different guarantees:
 
 - Codex read-only or workspace-write behavior is enforced by the Codex CLI
   sandbox selected for that run.
+- An isolated Codex run gets a unique scratch directory, an immutable
+  actor-context snapshot, and only explicitly configured read mounts. Its
+  permission profile denies the run-scope parent, then grants the current
+  context snapshot read-only and the current scratch directory writable.
+- Monde advertises isolated Codex support only after a real local verification
+  has proved sibling denial for both Codex and an isolated stdio MCP child. The
+  attestation is bound to the Codex and bubblewrap binaries, OS release, and
+  architecture.
 - **Unsandboxed execution under the Monde service user’s operating-system
   permissions.** This is the `basic-process` model. Its working directory and
   `MONDE_WORK_ROOT` are guidance, not an OS filesystem boundary.
+
+File mode `0700` is defense in depth, not the isolation claim. Isolated mode is
+an adapter capability; an adapter that cannot enforce it is refused. Verify
+the installed Codex adapter with:
+
+```bash
+monde adapter verify-isolation codex
+```
+
+Configured actor-context files are resolved without symlink traversal, bounded
+to 32 files and 256 KiB total, copied into the run scope, hashed, and sealed
+before launch. Source Mon/work roots are not implicitly readable by isolated
+Codex. Repository access must be declared through `read_mounts`.
 
 ## Harness Environment
 
@@ -50,7 +71,9 @@ XDG_CONFIG_HOME XDG_CACHE_HOME
 
 All other ambient variables are denied by default. This includes cloud and API
 credentials, SSH agent sockets, `NODE_OPTIONS`, and the Monde service token.
-Adapter-defined explicit variables are still supplied where required.
+Run scopes additionally provide `MONDE_RUN_SCRATCH` and
+`MONDE_ACTOR_CONTEXT` when present. Adapter-defined explicit variables are
+still supplied where required.
 
 ## Run-Scoped Authorization
 
@@ -67,17 +90,37 @@ The root service token is not intentionally injected into harnesses. This
 separation limits accidental capability spread, but it cannot protect against a
 malicious same-user process that can independently read service-owned files.
 
+## External MCP Grants
+
+Each external MCP server configured with `run_claims` receives a separate
+random grant. The database stores only its hash. Introspection returns the
+run ID, Mon and Monde IDs, integration and external execution keys, opaque
+external scope, audience, and expiry.
+
+Grants are accepted only while their run is starting or active and are revoked
+when the process ends. Authenticated streamable-HTTP MCP is constrained to
+loopback in v1. An isolated stdio MCP process runs under its own bubblewrap
+profile and sees only its declared read mounts, actor-context access, and
+scratch access.
+
 ## Backups
 
 `monde backup create` uses SQLite's online backup operation rather than copying
 the database file. The resulting user-only backup includes committed WAL state
-and is integrity-tested by the focused automated suite. Restore automation is
-not yet part of the operator CLI; recovery currently means copying a verified
-backup into a separate location and opening it with a compatible Monde version.
+and records a SHA-256 checksum after SQLite integrity and foreign-key checks.
+`monde backup verify` repeats those checks. `monde backup rehearse` restores
+only into an explicit, new directory outside the live data directory and never
+replaces live state.
+
+Scratch directories are outside SQLite and are not copied by the backup
+command. Prompt and event payloads remain durable operational data and are
+included in backups; selective redaction and backup exclusion are not part of
+this local-first progression.
 
 ## Out Of Scope
 
 The current model does not claim container isolation, operating-system sandbox
-enforcement for basic processes, safe multi-user hosting, or secure public
-network exposure. Those require separate architecture and are not implied by
-the local bearer-token design.
+enforcement for basic processes, safe multi-user hosting, secure public
+network exposure, or prompt/event secrecy from the local operator. Those
+require separate architecture and are not implied by the local bearer-token
+design.

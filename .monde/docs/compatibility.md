@@ -1,0 +1,86 @@
+# Compatibility And Migration
+
+The service database migrates forward to schema version 11 at startup. Startup
+still refuses a database whose schema is newer than the running service.
+
+## Existing Mon Defaults
+
+Missing fields retain legacy behavior:
+
+```json
+{
+  "max_active_runs": 1,
+  "run_workspace": { "mode": "shared" },
+  "actor_context": [],
+  "read_mounts": [],
+  "external_mcp_servers": []
+}
+```
+
+Existing Mons therefore keep:
+
+- one active process-backed run per Mon
+- their shared work root
+- current prompt, event, and artifact retention
+- existing path-referenced artifacts
+- no external MCP servers
+
+Concurrency is opt-in. `max_active_runs > 1` is rejected unless
+`run_workspace.mode` is `isolated`.
+
+## New Tables
+
+Migrations add:
+
+- `process_slots`
+- `run_workspaces`
+- `external_executions`
+- `external_mcp_grants`
+- `execution_manifests`
+- `execution_manifest_outputs`
+- `execution_manifest_availability`
+- `cron_schedules`
+- `cron_fires`
+
+Existing run, log, event, plan, and artifact rows are not rewritten into
+TeaParty-specific shapes.
+
+## Isolation Compatibility
+
+Shared workspaces remain available. Isolated mode is adapter capability-gated.
+For Codex, the installed Codex binary, bubblewrap binary, operating-system
+release, and architecture must match a successful local attestation:
+
+```bash
+monde adapter verify-isolation codex
+```
+
+Changing those components invalidates the attestation until it is rerun.
+
+## Backup Compatibility
+
+Existing checksum-less backup files remain listable and readable, but the new
+supported `backup verify` and `backup rehearse` path requires a recorded
+SHA-256 sidecar. Create a fresh online backup before relying on rehearsal:
+
+```bash
+monde backup create
+monde backup verify <backup.sqlite>
+```
+
+Restore rehearsal never replaces the live DB.
+
+## Deliberate Non-Features
+
+This progression does not add:
+
+- model or machine routing
+- automatic retry/backoff policy
+- a workflow engine
+- TeaParty Persona, Pater, Trinity, or Filius schemas
+- artifact byte/blob storage
+- semantic pipeline validation
+- prompt/event redaction
+
+Generic cron is a separate Monde capability. It enqueues normal runs and does
+not define workflows or retry policy.

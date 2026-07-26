@@ -16,6 +16,8 @@ MONDE_MON_ID
 MONDE_MON_ROOT
 MONDE_WORK_ROOT
 MONDE_DOCS_ROOT
+MONDE_RUN_SCRATCH
+MONDE_ACTOR_CONTEXT
 MONDE_HARNESS_ADAPTER
 MONDE_RUNNER_TYPE
 ```
@@ -96,9 +98,33 @@ approval_mode
 diff_capture
 ```
 
-For Codex, `write_scope` is the resolved mon `work_root`.
-Codex sandbox behavior is enforced by the Codex CLI, not by
-`basic-process`.
+For shared runs, `write_scope` is the resolved Mon `work_root`. For isolated
+runs, Codex executes from the unique writable scratch directory. It receives
+an immutable actor-context snapshot plus explicitly configured read mounts;
+the Mon and work roots are not implicitly readable.
+
+Isolated Codex support is capability-gated. Monde refuses to claim or launch it
+until the installed Codex/bubblewrap/host fingerprint passes:
+
+```bash
+monde adapter verify-isolation codex
+```
+
+The generated permission profile denies the run-scope parent, grants only the
+current context snapshot read-only and current scratch writable, and grants
+configured read mounts read-only. Codex sandbox behavior is enforced by Codex;
+isolated stdio MCP children receive an independent bubblewrap profile.
+
+## External MCP Servers
+
+Codex composes Monde's built-in MCP server with provider-neutral stdio and
+streamable-HTTP servers declared by the Mon. Server IDs are namespaced,
+startup can be required or optional, and run-claims auth uses a narrow
+server-specific grant rather than the Monde service token.
+
+Authenticated HTTP servers are loopback-only in v1. Isolated stdio children
+must separately opt into actor context, scratch access, a working directory,
+and read mounts. They cannot inherit Codex's full filesystem view.
 
 ## Liveness And Timeouts
 
@@ -119,6 +145,7 @@ Use:
 ```bash
 monde adapter list
 monde adapter inspect codex
+monde adapter verify-isolation codex
 ```
 
 Adapter inspect output includes:
@@ -129,6 +156,8 @@ Adapter inspect output includes:
 - prompt injection status
 - read/write support
 - supported sandbox modes
+- external MCP support
+- isolated-run support and attestation status
 - default sandbox mode
 - interactive-input support
 - manual requirements

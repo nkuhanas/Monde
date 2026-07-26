@@ -98,6 +98,8 @@ Harness/MCP calls use run-scoped auth:
 ```text
 MONDE_RUN_ID       identity
 MONDE_RUN_TOKEN    authorization
+MONDE_RUN_SCRATCH  isolated writable workspace, when configured
+MONDE_ACTOR_CONTEXT immutable context snapshot, when present
 ```
 
 The service token should not be passed to harnesses.
@@ -121,8 +123,8 @@ The web backend and Vite UI use strict local-origin CORS.
 Operational state is stored in the platform Monde data directory using
 Node's built-in SQLite binding.
 
-The DB has schema metadata and migrations. Startup fails clearly if the DB
-schema is newer than the service schema.
+The DB is currently schema version 11 and has ordered forward migrations.
+Startup fails clearly if the DB schema is newer than the service schema.
 
 The service currently uses WAL and foreign keys:
 
@@ -138,18 +140,28 @@ monde doctor
 monde backup info
 monde backup create
 monde backup list
+monde backup verify <backup.sqlite>
+monde backup rehearse <backup.sqlite> --destination <new-directory>
 ```
 
 `monde backup create` uses SQLite's online backup API. This produces a
 transactionally consistent database including committed WAL state while the
-service is running. The backup and its metadata are user-readable only. Full
-export/import and an operator-facing restore command remain post-MVP.
+service is running. The backup and its metadata are user-readable only.
+Creation and verification check SHA-256, SQLite integrity, and foreign keys.
+Rehearsal restores only into a new isolated destination and never overwrites
+live state.
+
+Run scratch data is stored outside SQLite under the service data directory.
+The database backup intentionally contains operational metadata and immutable
+manifest references, not those scratch bytes.
 
 ## Startup And Restart Behavior
 
 On startup, the run manager marks previously active process-backed runs as
 lost/interrupted because the local service no longer owns their process
-handles.
+handles. It releases orphaned process-slot reservations, records external
+process or cancellation loss where applicable, seals run scopes, and revokes
+run-scoped grants.
 
 Queued and blocked runs remain persisted. They do not auto-start on service
 restart.
@@ -167,6 +179,10 @@ mon_json
 monde_json
 model
 capabilities
+workspace policy
+actor context
+read mounts
+external MCP servers
 ```
 
 All roots are resolved to canonical, existing directories at run start.
@@ -174,14 +190,50 @@ All roots are resolved to canonical, existing directories at run start.
 `allow_external_work_root` is explicitly true in `mon.json`. This containment
 check is applied to relative paths, absolute paths, and symlink targets.
 
-`work_root` is the expected working directory for harness work. It is a real
-sandbox boundary only when the selected adapter enforces one. In particular,
-`basic-process` is unsandboxed and retains all filesystem permissions of the
-service user.
+Shared mode preserves the existing `work_root` behavior. Isolated mode creates
+a unique run scope containing:
+
+```text
+context/     immutable actor-context snapshot
+scratch/     current run's writable execution workspace
+```
+
+Actor-context entries are ordered, containment-checked, symlink-free, and
+bounded to 32 files, 64 KiB per file, and 256 KiB total. The exact bytes are
+copied and hashed before launch. Source roots are not automatically exposed to
+an isolated adapter; configured `read_mounts` are explicit read capabilities.
+
+Isolation is real only when the selected adapter declares and passes an
+enforced capability. `basic-process` remains unsandboxed. Codex isolated mode
+requires a matching `monde adapter verify-isolation codex` attestation.
+
+On process exit, the run scope is sealed and retained for the configured
+recovery window. Cleanup is idempotent, retried after failure, and marks local
+manifest references expired while preserving operational metadata.
 
 Stale scope detection is polling-based for MVP. The run manager periodically
 checks fingerprinted scope files and adds `stale_scope` warnings when the
 identity/scope root changes while a run is active.
+
+## Process Slots
+
+Each Mon has an atomic SQLite-backed process-slot limit. Existing Mons default
+to `max_active_runs: 1`; higher limits require isolated workspaces. The
+dispatcher always considers the oldest runnable queued run and fills newly
+available slots after a process exits or queued work is cancelled.
+
+HITL adapter turns reserve process capacity only while their process turn is
+actually active. An open thread does not permanently occupy a process slot.
+
+## Cron Scheduler
+
+Generic cron is a Monde capability. Five-field expressions are evaluated in
+the configured IANA timezone, including DST behavior. A fire creates an
+ordinary `origin.type = cron` run and uses the same dispatcher and Mon limits.
+
+Missed fires coalesce to the latest due time, and a schedule has at most one
+queued, starting, or active run. Cron does not implement workflows, retry
+policy, or model/machine routing.
 
 ## Runtime Events
 

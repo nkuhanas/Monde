@@ -83,7 +83,7 @@ Project work roots
 The runtime centers on runs:
 
 ```text
-Plan / Cron / Operator / System
+Plan / Cron / External / Operator / System
         -> Run
         -> Logs + Artifacts + Result + Review
 ```
@@ -167,6 +167,7 @@ Read the token from the reported token path and paste it into the UI.
 | Runs | Process lifecycle, terminal output, queue state, and review entry points |
 | Review | Logs, artifacts, runtime scope, write evidence, result notes, and semantic outcome |
 | Plans | Coordination contracts that generate queued runs from assignments |
+| Cron | Generic timezone-aware schedules that enqueue ordinary Mon runs |
 | Artifacts | Path-referenced evidence with bounded previews and path status |
 | Status | Service health, adapter detection, backup state, doctor findings, and DB metadata |
 
@@ -198,11 +199,21 @@ One-shot runs are process-bounded work. HITL threads are user-session-bounded
 conversations. Both share the same run evidence model, but expose different
 state to the operator.
 
+Each Mon defaults to one process slot and a shared work root. Opt-in concurrent
+Mons use atomic process slots and isolated run scopes with unique scratch
+workspaces, immutable actor context, and explicit read mounts.
+
 Codex write-capable runs are explicit. Codex defaults to read-only unless a
 write sandbox is requested, and write runs capture metadata and diff evidence
-when Git context is available. `basic-process` has a different trust boundary:
+when Git context is available. Isolated Codex support requires a locally
+verified adapter capability. `basic-process` has a different trust boundary:
 it is unsandboxed and runs with the Monde service user's operating-system
 permissions.
+
+Generic external executions add durable idempotency keys, explicit completion
+and cancellation reconciliation, external MCP grants, and immutable output
+manifests without moving workflow, retry, semantic validation, or artifact
+bytes into Monde.
 
 ## Runtime support today
 
@@ -233,6 +244,10 @@ Detailed docs live in `.monde/docs/`:
 - `.monde/docs/api-contracts.md` - frontend/backend DTO and endpoint contracts
 - `.monde/docs/harness-liveness.md` - HITL idle and hard timeout model
 - `.monde/docs/security-model.md` - local trust boundary, scope, environment, auth
+- `.monde/docs/tea-party-integration.md` - generic external execution API and examples
+- `.monde/docs/tea-party-acceptance.md` - implementation-to-test acceptance map
+- `.monde/docs/compatibility.md` - defaults and schema migration behavior
+- `.monde/docs/backup-restore.md` - checksum verification and isolated rehearsal
 
 Harnesses can search these docs through Monde's `search_docs` tool.
 
@@ -243,8 +258,9 @@ Monde is MVP local operator runtime software. The current focus is:
 - making local agent work visually legible
 - hardening HITL chat and run review flows
 - improving write evidence and artifact review
+- hardening the generic external-execution substrate
 - expanding harness support without weakening scoped permissions
 - keeping setup and recovery clear for local-first use
 
 Future work includes richer onboarding visuals, packaged releases, deeper
-adapter coverage, import/export and restore flows, and deployment guidance.
+adapter coverage, live import/restore workflows, and deployment guidance.
