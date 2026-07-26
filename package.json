@@ -22,7 +22,11 @@
     "dev:web": "npm run dev -w @monde/web",
     "dev:all": "npm run dev:service & npm run dev:web",
     "monde": "npm run build -w @monde/core && npm run dev -w @monde/cli --",
+    "browser:install": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright install chromium",
     "test": "node --conditions development --import tsx --test tests/*.test.ts",
+    "test:web": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright test",
+    "test:web:headed": "PLAYWRIGHT_BROWSERS_PATH=.playwright-browsers playwright test --headed",
+    "test:web:report": "playwright show-report playwright-report",
     "smoke:all": "npm run test && npm run smoke:ci",
     "smoke:ci": "npm run build && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:vertical-slice-1 && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:local-alpha && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:harness-alpha && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:harness-beta && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:write-evidence && MONDE_SMOKE_SKIP_BUILD=1 npm run smoke:beta-review",
     "smoke:external": "npm run build && MONDE_SMOKE_SKIP_BUILD=1 MONDE_ENABLE_EXTERNAL_CODEX_SMOKE=1 bash scripts/smoke-harness-beta.sh && MONDE_SMOKE_SKIP_BUILD=1 bash scripts/smoke-codex-write.sh",
@@ -35,7 +39,9 @@
     "smoke:beta-review": "bash scripts/smoke-beta-review.sh"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.0",
     "@types/node": "^22.15.29",
+    "chrome-devtools-mcp": "^1.6.0",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"
   }

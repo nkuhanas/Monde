@@ -10,3 +10,6 @@ dist/
 .codex/
 .obsidian/
 .monde/.obsidian/
+.playwright-browsers/
+playwright-report/
+test-results/

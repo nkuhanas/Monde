@@ -133,6 +133,42 @@ npm run smoke:external
 Smoke tests create temporary Monde roots and runtime state. They should not
 depend on the operator's active local SQLite DB.
 
+## Browser Preview
+
+Install the workspace-scoped Chromium build once:
+
+```bash
+npm run browser:install
+```
+
+Run the authenticated Chromium preview smoke with:
+
+```bash
+npm run test:web
+```
+
+Playwright starts dedicated Monde service and Vite processes, saves a full-page
+overview screenshot under `test-results/`, and retains traces and screenshots
+on failures. Use `npm run test:web:headed` for an interactive browser.
+
+The browser smoke does not reuse the operator's normal listeners or SQLite
+database. It starts dedicated listeners, resets temporary XDG state under
+`/tmp/monde-playwright-preview`, seeds a known Monde and mon through the API,
+and verifies that the UI is authenticated against that isolated database.
+Override its defaults only when needed:
+
+```text
+MONDE_WEB_TEST_UI_PORT       default 45175
+MONDE_WEB_TEST_SERVICE_PORT  default 43761
+MONDE_WEB_TEST_MCP_PORT      default 43762
+MONDE_WEB_TEST_ROOT          default /tmp/monde-playwright-preview
+```
+
+The local `.codex/config.toml` enables an isolated, headless Chrome DevTools MCP
+server for this trusted repository. It uses the same workspace Chromium build
+and does not use a personal browser profile. Restart Codex after changing MCP
+configuration so the browser tools become available in a new session.
+
 ## Operational Continuity
 
 For local service state and backups:

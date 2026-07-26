@@ -29,6 +29,16 @@ export interface RunManagerConfig {
   mcpAddr: string;
 }
 
+export interface RunManagerTimer {
+  unref(): void;
+}
+
+export interface RunManagerClock {
+  now(): number;
+  setTimeout(callback: () => void, delayMs: number): RunManagerTimer;
+  clearTimeout(timer: RunManagerTimer): void;
+}
+
 export interface StartRunResult {
   run: RunRecord;
   started: boolean;
@@ -61,16 +71,23 @@ interface HitlActivityState {
   lastActivityReason: string;
   lastActivityEventAtMs: number;
   processHandle?: RunningProcess;
-  idleTimer?: NodeJS.Timeout;
-  hardTimer?: NodeJS.Timeout;
+  idleTimer?: RunManagerTimer;
+  hardTimer?: RunManagerTimer;
   timedOut: boolean;
   onTimeout(reason: HitlTimeoutReason): void;
 }
+
+const systemRunManagerClock: RunManagerClock = {
+  now: () => Date.now(),
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout)
+};
 
 export class RunManager {
   private readonly running = new Map<string, RunningRun>();
   private readonly hitlActivities = new Map<string, HitlActivityState>();
   private readonly runner: HarnessRunner;
+  private readonly clock: RunManagerClock;
 
   constructor(
     private readonly deps: {
@@ -83,9 +100,11 @@ export class RunManager {
       events: RunEventBus;
       config: RunManagerConfig;
       runner?: HarnessRunner;
+      clock?: RunManagerClock;
     }
   ) {
     this.runner = deps.runner ?? new BasicProcessRunner();
+    this.clock = deps.clock ?? systemRunManagerClock;
   }
 
   async startRun(runId: string): Promise<StartRunResult> {
@@ -399,7 +418,7 @@ export class RunManager {
         }
       };
 
-      const startedAtMs = Date.now();
+      const startedAtMs = this.clock.now();
       const startedAt = new Date(startedAtMs).toISOString();
       const activity: HitlActivityState = {
         runId: input.runId,
@@ -570,7 +589,7 @@ export class RunManager {
       return;
     }
 
-    const nowMs = Date.now();
+    const nowMs = this.clock.now();
     const now = new Date(nowMs).toISOString();
     activity.lastActivityAtMs = nowMs;
     activity.lastActivityAt = now;
@@ -600,22 +619,22 @@ export class RunManager {
 
   private resetHitlIdleTimer(activity: HitlActivityState): void {
     if (activity.idleTimer) {
-      clearTimeout(activity.idleTimer);
+      this.clock.clearTimeout(activity.idleTimer);
     }
 
     activity.idleTimer = activity.idleTimeoutMs > 0
-      ? setTimeout(() => this.timeoutHitlTurn(activity, "idle_timeout"), activity.idleTimeoutMs)
+      ? this.clock.setTimeout(() => this.timeoutHitlTurn(activity, "idle_timeout"), activity.idleTimeoutMs)
       : undefined;
     activity.idleTimer?.unref();
   }
 
   private startHitlHardTimer(activity: HitlActivityState): void {
     if (activity.hardTimer) {
-      clearTimeout(activity.hardTimer);
+      this.clock.clearTimeout(activity.hardTimer);
     }
 
     activity.hardTimer = activity.hardTimeoutMs > 0
-      ? setTimeout(() => this.timeoutHitlTurn(activity, "hard_timeout"), activity.hardTimeoutMs)
+      ? this.clock.setTimeout(() => this.timeoutHitlTurn(activity, "hard_timeout"), activity.hardTimeoutMs)
       : undefined;
     activity.hardTimer?.unref();
   }
@@ -628,13 +647,13 @@ export class RunManager {
 
     activity.timedOut = true;
     if (activity.idleTimer) {
-      clearTimeout(activity.idleTimer);
+      this.clock.clearTimeout(activity.idleTimer);
     }
     if (activity.hardTimer) {
-      clearTimeout(activity.hardTimer);
+      this.clock.clearTimeout(activity.hardTimer);
     }
 
-    const now = new Date().toISOString();
+    const now = new Date(this.clock.now()).toISOString();
     const run = this.deps.runs.get(activity.runId);
     if (run) {
       this.deps.runs.updateExecution(activity.runId, {
@@ -659,7 +678,7 @@ export class RunManager {
     const processHandle = activity.processHandle;
     processHandle?.kill("SIGTERM");
     if (processHandle && activity.killGraceMs > 0) {
-      setTimeout(() => processHandle.kill("SIGKILL"), activity.killGraceMs).unref();
+      this.clock.setTimeout(() => processHandle.kill("SIGKILL"), activity.killGraceMs).unref();
     }
     activity.onTimeout(reason);
   }
@@ -671,10 +690,10 @@ export class RunManager {
     }
 
     if (activity.idleTimer) {
-      clearTimeout(activity.idleTimer);
+      this.clock.clearTimeout(activity.idleTimer);
     }
     if (activity.hardTimer) {
-      clearTimeout(activity.hardTimer);
+      this.clock.clearTimeout(activity.hardTimer);
     }
     this.hitlActivities.delete(runId);
   }
