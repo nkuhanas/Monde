@@ -434,6 +434,8 @@ export interface CodexIsolationFingerprint {
   codex_binary_sha256: string;
   bwrap_version: string;
   bwrap_binary_sha256: string;
+  sandbox_policy_sha256: string;
+  node_version: string;
   platform: string;
   release: string;
   arch: string;
@@ -445,6 +447,25 @@ export interface CodexIsolationAttestation {
   command_probe: "passed";
   stdio_child_probe: "passed";
 }
+
+const codexIsolationPolicyDescriptor = [
+  "version=1",
+  "codex:minimal-system=read",
+  "codex:run-scopes-parent=deny",
+  "codex:actor-context=read",
+  "codex:current-scratch=write",
+  "codex:explicit-read-mounts=read",
+  "stdio:die-with-parent",
+  "stdio:unshare-pid",
+  "stdio:unshare-ipc",
+  "stdio:system-paths=read-only",
+  "stdio:tmp=ephemeral",
+  "stdio:declared-mounts-only"
+].join("\n");
+
+export const codexIsolationPolicySha256 = createHash("sha256")
+  .update(codexIsolationPolicyDescriptor, "utf8")
+  .digest("hex");
 
 export function codexIsolationAttestationPath(): string {
   return path.join(getMondePlatformPaths().dataDir, "adapter-attestations", "codex-isolation.json");
@@ -463,6 +484,8 @@ export function currentCodexIsolationFingerprint(): CodexIsolationFingerprint | 
     codex_binary_sha256: hashFile(codexPath),
     bwrap_version: (bwrap.stdout || bwrap.stderr).trim().split(/\r?\n/)[0],
     bwrap_binary_sha256: hashFile(bwrapPath),
+    sandbox_policy_sha256: codexIsolationPolicySha256,
+    node_version: process.version,
     platform: process.platform,
     release: os.release(),
     arch: os.arch()
@@ -476,10 +499,21 @@ export function readCodexIsolationAttestation(): CodexIsolationAttestation | und
   }
   try {
     const parsed = JSON.parse(fs.readFileSync(codexIsolationAttestationPath(), "utf8")) as CodexIsolationAttestation;
-    return JSON.stringify(parsed.fingerprint) === JSON.stringify(fingerprint) ? parsed : undefined;
+    return codexIsolationAttestationMatches(parsed, fingerprint) ? parsed : undefined;
   } catch {
     return undefined;
   }
+}
+
+export function codexIsolationAttestationMatches(
+  attestation: CodexIsolationAttestation,
+  fingerprint: CodexIsolationFingerprint
+): boolean {
+  return (
+    attestation.command_probe === "passed" &&
+    attestation.stdio_child_probe === "passed" &&
+    JSON.stringify(attestation.fingerprint) === JSON.stringify(fingerprint)
+  );
 }
 
 export function verifyCodexIsolation(): CodexIsolationAttestation {

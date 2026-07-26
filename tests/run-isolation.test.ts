@@ -4,11 +4,26 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { codexAdapter } from "@monde/adapters";
+import {
+  codexAdapter,
+  codexIsolationAttestationMatches,
+  codexIsolationAttestationPath,
+  currentCodexIsolationFingerprint,
+  readCodexIsolationAttestation,
+  type CodexIsolationAttestation,
+  type CodexIsolationFingerprint
+} from "@monde/adapters";
 import { MonConfigSchema, type RunRecord } from "@monde/core";
 import { migrateDatabase } from "../packages/service/src/db.ts";
+import { ArtifactRepository } from "../packages/service/src/repositories/artifacts.ts";
+import { LogRepository } from "../packages/service/src/repositories/logs.ts";
+import { MonRepository } from "../packages/service/src/repositories/mons.ts";
+import { MondeRepository } from "../packages/service/src/repositories/mondes.ts";
+import { ProcessSlotRepository } from "../packages/service/src/repositories/process-slots.ts";
+import { RunEventRepository } from "../packages/service/src/repositories/run-events.ts";
 import { RunWorkspaceRepository } from "../packages/service/src/repositories/run-workspaces.ts";
 import { RunRepository } from "../packages/service/src/repositories/runs.ts";
+import { RunEventBus } from "../packages/service/src/run-events.ts";
 import { RunManager } from "../packages/service/src/run-manager.ts";
 import { materializeRunScope, resolveRunScope } from "../packages/service/src/scope.ts";
 import type { MonRow } from "../packages/service/src/repositories/mons.ts";
@@ -223,4 +238,136 @@ test("cleanup failures are retained and retried without deleting run metadata", 
   assert.equal(workspaces.get(run.id)?.cleanup_attempts, 2);
   assert.equal(runs.get(run.id)?.intent.prompt, "cleanup");
   assert.equal(events.filter((event) => event.type === "run_scope_cleanup_failed").length, 2);
+});
+
+test("isolation attestation rejects stale binaries, policy, and runtime fingerprints", () => {
+  const fingerprint: CodexIsolationFingerprint = {
+    codex_version: "codex 1.0.0",
+    codex_binary_sha256: "a".repeat(64),
+    bwrap_version: "bubblewrap 1.0.0",
+    bwrap_binary_sha256: "b".repeat(64),
+    sandbox_policy_sha256: "c".repeat(64),
+    node_version: "v22.0.0",
+    platform: "linux",
+    release: "1.0.0",
+    arch: "x64"
+  };
+  const attestation: CodexIsolationAttestation = {
+    verified_at: "2026-01-01T00:00:00.000Z",
+    fingerprint,
+    command_probe: "passed",
+    stdio_child_probe: "passed"
+  };
+
+  assert.equal(codexIsolationAttestationMatches(attestation, fingerprint), true);
+  for (const stale of [
+    { ...fingerprint, codex_binary_sha256: "d".repeat(64) },
+    { ...fingerprint, bwrap_binary_sha256: "e".repeat(64) },
+    { ...fingerprint, sandbox_policy_sha256: "f".repeat(64) },
+    { ...fingerprint, node_version: "v23.0.0" },
+    { ...fingerprint, release: "2.0.0" }
+  ]) {
+    assert.equal(codexIsolationAttestationMatches(attestation, stale), false);
+  }
+});
+
+test("stale policy attestation prevents isolated Codex admission", async (t) => {
+  const previousDataHome = process.env.XDG_DATA_HOME;
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "monde-stale-attestation-"));
+  process.env.XDG_DATA_HOME = tempRoot;
+  t.after(() => {
+    if (previousDataHome === undefined) {
+      delete process.env.XDG_DATA_HOME;
+    } else {
+      process.env.XDG_DATA_HOME = previousDataHome;
+    }
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  const fingerprint = currentCodexIsolationFingerprint();
+  if (!fingerprint) {
+    t.skip("Codex and bubblewrap are required for admission fingerprinting.");
+    return;
+  }
+  const stale: CodexIsolationAttestation = {
+    verified_at: "2026-01-01T00:00:00.000Z",
+    fingerprint: {
+      ...fingerprint,
+      sandbox_policy_sha256: "0".repeat(64)
+    },
+    command_probe: "passed",
+    stdio_child_probe: "passed"
+  };
+  const attestationPath = codexIsolationAttestationPath();
+  fs.mkdirSync(path.dirname(attestationPath), { recursive: true });
+  fs.writeFileSync(attestationPath, JSON.stringify(stale));
+
+  assert.equal(readCodexIsolationAttestation(), undefined);
+  assert.equal(codexAdapter.detect().supports_isolated_runs, false);
+  assert.equal(codexAdapter.detect().isolation_status, "verification_required");
+
+  const fixture = scopeFixture(t);
+  const db = new DatabaseSync(":memory:");
+  t.after(() => db.close());
+  migrateDatabase(db);
+  const mondes = new MondeRepository(db);
+  const mons = new MonRepository(db);
+  const runs = new RunRepository(db);
+  mondes.upsert({
+    id: fixture.monde.id,
+    name: fixture.monde.name,
+    root: fixture.monde.root,
+    docs: fixture.monde.docs
+  });
+  mons.upsert({
+    id: fixture.mon.id,
+    monde_id: fixture.mon.monde_id,
+    name: fixture.mon.name,
+    role: fixture.mon.role,
+    mon_root: fixture.mon.mon_root,
+    work_root: fixture.mon.work_root,
+    default_harness: fixture.mon.default_harness,
+    default_model: fixture.mon.default_model,
+    capabilities: fixture.mon.capabilities
+  });
+  const now = "2026-01-01T00:00:00.000Z";
+  const run: RunRecord = {
+    id: "run_stale_attestation",
+    monde_id: "test",
+    mon_id: "seia",
+    status: "queued",
+    process_status: "not_started",
+    outcome: "unknown",
+    interaction_mode: "one_shot",
+    runtime_state: "queued",
+    outcome_state: "unknown",
+    close_reason: null,
+    warnings: [],
+    origin: { type: "system", label: "isolation-admission-test" },
+    intent: { title: "Isolation admission", prompt: "Test." },
+    execution: {},
+    result: {},
+    created_at: now,
+    updated_at: now
+  };
+  runs.insert(run);
+  const manager = new RunManager({
+    mondes,
+    mons,
+    processSlots: new ProcessSlotRepository(db),
+    runs,
+    logs: new LogRepository(db),
+    artifacts: new ArtifactRepository(db),
+    events: new RunEventBus(new RunEventRepository(db)),
+    config: {
+      serviceAddr: "http://127.0.0.1:3761",
+      mcpAddr: "http://127.0.0.1:3762/mcp",
+      dataDir: path.join(fixture.tempRoot, "data")
+    }
+  });
+
+  await assert.rejects(
+    () => manager.startRun(run.id),
+    /cannot enforce isolated runs: verification_required/
+  );
 });
