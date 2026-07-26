@@ -22,6 +22,8 @@ export const runRuntimeStates = [
   "running",
   "waiting_for_user",
   "idle_open",
+  "awaiting_completion",
+  "cancelling",
   "closing",
   "closed",
   "failed",

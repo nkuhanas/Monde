@@ -4,11 +4,16 @@ import path from "node:path";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { finishRunFromExit, MonConfigSchema, resolveWorkRoot } from "@monde/core";
+import { canonicalSha256 } from "@monde/core";
 import type { BackupInfoDto, BackupMetadataDto, DoctorFindingDto, MonConfig } from "@monde/core";
 import type { RunCloseReason, RunRecord } from "@monde/core";
 import { harnessAdapters } from "@monde/adapters";
 import type { ServiceAuth } from "./auth.js";
 import { ArtifactRepository } from "./repositories/artifacts.js";
+import {
+  ExternalExecutionConflictError,
+  ExternalExecutionRepository
+} from "./repositories/external-executions.js";
 import { LogRepository } from "./repositories/logs.js";
 import { MonRepository, type MonRow, type MonUpsert } from "./repositories/mons.js";
 import { MondeRepository } from "./repositories/mondes.js";
@@ -63,6 +68,7 @@ export interface RouteDeps {
   database: MondeDatabase;
   auth: ServiceAuth;
   mondes: MondeRepository;
+  externalExecutions: ExternalExecutionRepository;
   mons: MonRepository;
   plans: PlanRepository;
   runs: RunRepository;
@@ -136,7 +142,7 @@ function monDto(mon: MonRow): MonRow & {
 }
 
 export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
-  const { auth, mondes, mons, plans, runs, runEvents, eventBus, runManager, tools } = deps;
+  const { auth, mondes, mons, plans, runs, runEvents, eventBus, runManager, tools, externalExecutions } = deps;
   const logs = new LogRepository(deps.database.db);
   const artifacts = new ArtifactRepository(deps.database.db);
   app.get("/health", async () => ({
@@ -440,6 +446,196 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     }
 
     return { run };
+  });
+
+  app.post("/external-executions", async (request, reply) => {
+    const body = z
+      .object({
+        integration_id: z.string().min(1).max(128),
+        external_execution_key: z.string().min(1).max(512),
+        monde_id: z.string().min(1),
+        mon_id: z.string().min(1),
+        input: z.object({ kind: z.literal("prompt"), prompt: z.string().min(1).max(1024 * 1024) }),
+        harness_override: z.string().min(1).optional(),
+        external_scope: z.unknown(),
+        external_context: z.unknown(),
+        artifact_sink_ref: z.unknown().optional(),
+        external_lineage: z.unknown().optional(),
+        predecessor: z
+          .object({
+            integration_id: z.string().min(1).max(128).optional(),
+            external_execution_key: z.string().min(1).max(512)
+          })
+          .optional(),
+        request_digest: z.string().regex(/^[a-f0-9]{64}$/)
+      })
+      .strict()
+      .parse(request.body);
+
+    if (!mondes.get(body.monde_id) || !mons.get(body.monde_id, body.mon_id)) {
+      return reply.code(404).send({ error: "execution_target_not_found" });
+    }
+    try {
+      assertCanonicalSize(body.external_scope, 4096, "external_scope");
+      assertCanonicalSize(body.external_context, 64 * 1024, "external_context");
+      if (body.artifact_sink_ref !== undefined) assertCanonicalSize(body.artifact_sink_ref, 16 * 1024, "artifact_sink_ref");
+      if (body.external_lineage !== undefined) assertCanonicalSize(body.external_lineage, 32 * 1024, "external_lineage");
+    } catch (error) {
+      return reply.code(422).send({ error: "payload_too_large", message: error instanceof Error ? error.message : String(error) });
+    }
+
+    const { request_digest: _requestDigest, ...digestPayload } = body;
+    const computedDigest = canonicalSha256(digestPayload);
+    if (computedDigest !== body.request_digest) {
+      return reply.code(422).send({ error: "request_digest_mismatch", computed_digest: computedDigest });
+    }
+
+    const run = createExternalRun(body);
+    try {
+      const reserved = externalExecutions.createOrGet({
+        integrationId: body.integration_id,
+        externalExecutionKey: body.external_execution_key,
+        requestDigest: body.request_digest,
+        run,
+        externalScope: body.external_scope,
+        externalContext: body.external_context,
+        artifactSinkRef: body.artifact_sink_ref,
+        externalLineage: body.external_lineage,
+        predecessorIntegrationId: body.predecessor?.integration_id,
+        predecessorExternalKey: body.predecessor?.external_execution_key
+      });
+      if (reserved.created) {
+        try {
+          await runManager.dispatchQueuedForMon(body.monde_id, body.mon_id);
+        } catch (error) {
+          externalExecutions.markFailedByRun(reserved.execution.run_id, "configuration_error");
+          runs.updateLifecycle(reserved.execution.run_id, {
+            status: "finished",
+            process_status: "not_started",
+            outcome: "failed",
+            runtime_state: "failed",
+            outcome_state: "failed",
+            close_reason: "error",
+            ended_at: new Date().toISOString(),
+            closed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          });
+          eventBus.publish(reserved.execution.run_id, "external_execution_start_failed", {
+            run_id: reserved.execution.run_id,
+            error: error instanceof Error ? error.message : String(error)
+          });
+        }
+      }
+      const execution = externalExecutions.get(reserved.execution.id)!;
+      return reply.code(reserved.created ? 201 : 200).send({
+        execution,
+        run: runs.get(execution.run_id),
+        created: reserved.created
+      });
+    } catch (error) {
+      if (error instanceof ExternalExecutionConflictError) {
+        return reply.code(409).send({ error: error.code, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/external-executions/lookup", async (request, reply) => {
+    const query = z
+      .object({
+        integration_id: z.string().min(1),
+        external_execution_key: z.string().min(1)
+      })
+      .parse(request.query);
+    const execution = externalExecutions.getByKey(query.integration_id, query.external_execution_key);
+    if (!execution) {
+      return reply.code(404).send({ error: "external_execution_not_found" });
+    }
+    return { execution, run: runs.get(execution.run_id) };
+  });
+
+  app.get("/external-executions/:id", async (request, reply) => {
+    const params = request.params as { id: string };
+    const execution = externalExecutions.get(params.id);
+    if (!execution) {
+      return reply.code(404).send({ error: "external_execution_not_found" });
+    }
+    return { execution, run: runs.get(execution.run_id) };
+  });
+
+  app.get("/runs/:id/external-execution", async (request, reply) => {
+    const params = request.params as { id: string };
+    const execution = externalExecutions.getByRunId(params.id);
+    if (!execution) {
+      return reply.code(404).send({ error: "external_execution_not_found" });
+    }
+    return { execution };
+  });
+
+  app.post("/external-executions/:id/complete", async (request, reply) => {
+    const params = request.params as { id: string };
+    if (!externalExecutions.get(params.id)) {
+      return reply.code(404).send({ error: "external_execution_not_found" });
+    }
+    const body = z
+      .object({
+        completion_receipt: z.unknown().optional(),
+        manifest_id: z.string().min(1).optional(),
+        completion_digest: z.string().regex(/^[a-f0-9]{64}$/)
+      })
+      .strict()
+      .refine((value) => value.completion_receipt !== undefined || value.manifest_id !== undefined, {
+        message: "completion_receipt or manifest_id is required"
+      })
+      .parse(request.body);
+    if (body.manifest_id && body.completion_receipt === undefined) {
+      return reply.code(409).send({ error: "manifest_not_found" });
+    }
+    if (body.completion_receipt !== undefined) {
+      try {
+        assertCanonicalSize(body.completion_receipt, 64 * 1024, "completion_receipt");
+      } catch (error) {
+        return reply.code(422).send({ error: "payload_too_large", message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    const digestPayload = {
+      ...(body.completion_receipt !== undefined ? { completion_receipt: body.completion_receipt } : {}),
+      ...(body.manifest_id !== undefined ? { manifest_id: body.manifest_id } : {})
+    };
+    const computedDigest = canonicalSha256(digestPayload);
+    if (computedDigest !== body.completion_digest) {
+      return reply.code(422).send({ error: "completion_digest_mismatch", computed_digest: computedDigest });
+    }
+    try {
+      const execution = runManager.completeExternalExecution({
+        executionId: params.id,
+        completionDigest: body.completion_digest,
+        completionReceipt: body.completion_receipt,
+        manifestId: body.manifest_id
+      });
+      return { execution, run: runs.get(execution.run_id) };
+    } catch (error) {
+      if (error instanceof ExternalExecutionConflictError) {
+        return reply.code(409).send({ error: error.code, message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.post("/external-executions/:id/cancel", async (request, reply) => {
+    const params = request.params as { id: string };
+    if (!externalExecutions.get(params.id)) {
+      return reply.code(404).send({ error: "external_execution_not_found" });
+    }
+    try {
+      const execution = runManager.cancelExternalExecution(params.id);
+      return { execution, run: runs.get(execution.run_id) };
+    } catch (error) {
+      if (error instanceof ExternalExecutionConflictError) {
+        return reply.code(409).send({ error: error.code, message: error.message });
+      }
+      throw error;
+    }
   });
 
   app.get("/runs/:id/events/history", async (request, reply) => {
@@ -1234,6 +1430,54 @@ function createOperatorRun(
     created_at: now,
     updated_at: now
   };
+}
+
+function createExternalRun(body: {
+  integration_id: string;
+  external_execution_key: string;
+  monde_id: string;
+  mon_id: string;
+  input: { kind: "prompt"; prompt: string };
+  harness_override?: string;
+}): RunRecord {
+  const now = new Date().toISOString();
+  return {
+    id: `run_${nanoid(10)}`,
+    monde_id: body.monde_id,
+    mon_id: body.mon_id,
+    status: "queued",
+    process_status: "not_started",
+    outcome: "unknown",
+    interaction_mode: "one_shot",
+    runtime_state: "queued",
+    outcome_state: "unknown",
+    close_reason: null,
+    warnings: [],
+    origin: {
+      type: "system",
+      label: `external:${body.integration_id}:${body.external_execution_key}`
+    },
+    intent: {
+      title: `External execution ${body.external_execution_key}`,
+      prompt: body.input.prompt
+    },
+    execution: {
+      externally_managed: true,
+      integration_id: body.integration_id,
+      external_execution_key: body.external_execution_key,
+      ...(body.harness_override ? { harness_override: body.harness_override } : {})
+    },
+    result: {},
+    created_at: now,
+    updated_at: now
+  };
+}
+
+function assertCanonicalSize(value: unknown, maxBytes: number, label: string): void {
+  const bytes = Buffer.byteLength(JSON.stringify(value) ?? "");
+  if (bytes > maxBytes) {
+    throw new Error(`${label} exceeds ${maxBytes} bytes.`);
+  }
 }
 
 function isOpenThreadRuntimeState(runtimeState: string): boolean {

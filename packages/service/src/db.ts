@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 
-export const schemaVersion = 7;
+export const schemaVersion = 8;
 
 export interface MondeDatabase {
   db: DatabaseSync;
@@ -286,6 +286,50 @@ export function migrateDatabase(db: DatabaseSync): void {
 
         CREATE INDEX IF NOT EXISTS run_workspaces_expiry_idx
           ON run_workspaces(state, expires_at);
+      `);
+    }
+
+    if (current < 8) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS external_executions (
+          id TEXT PRIMARY KEY,
+          integration_id TEXT NOT NULL,
+          external_execution_key TEXT NOT NULL,
+          request_digest TEXT NOT NULL,
+          run_id TEXT NOT NULL UNIQUE REFERENCES runs(id) ON DELETE CASCADE,
+          monde_id TEXT NOT NULL,
+          mon_id TEXT NOT NULL,
+          external_scope_json TEXT NOT NULL,
+          external_context_json TEXT NOT NULL,
+          artifact_sink_ref_json TEXT,
+          external_lineage_json TEXT,
+          predecessor_integration_id TEXT,
+          predecessor_external_key TEXT,
+          local_predecessor_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+          phase TEXT NOT NULL,
+          outcome TEXT,
+          condition TEXT,
+          process_exit_code INTEGER,
+          process_exit_signal TEXT,
+          process_exited_at TEXT,
+          completion_digest TEXT,
+          completion_receipt_json TEXT,
+          completion_manifest_id TEXT,
+          completion_received_at TEXT,
+          completion_deadline_at TEXT,
+          cancellation_state TEXT NOT NULL DEFAULT 'none',
+          cancellation_requested_at TEXT,
+          cancellation_signalled_at TEXT,
+          cancellation_acknowledged_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(integration_id, external_execution_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS external_executions_run_idx
+          ON external_executions(run_id);
+        CREATE INDEX IF NOT EXISTS external_executions_deadline_idx
+          ON external_executions(phase, completion_deadline_at);
       `);
     }
 

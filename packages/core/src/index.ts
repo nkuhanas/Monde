@@ -1,5 +1,6 @@
 export * from "./ids.js";
 export * from "./api-contracts.js";
+export * from "./canonical-json.js";
 export * from "./paths.js";
 export * from "./platform.js";
 export * from "./run-state.js";

@@ -30,6 +30,7 @@ import type { ProcessSlotRepository } from "./repositories/process-slots.js";
 import type { RunRepository } from "./repositories/runs.js";
 import type { RunWorkspaceRepository } from "./repositories/run-workspaces.js";
 import type { ArtifactRepository } from "./repositories/artifacts.js";
+import type { ExternalExecutionRepository } from "./repositories/external-executions.js";
 import type { LogRepository } from "./repositories/logs.js";
 
 export interface RunManagerConfig {
@@ -102,6 +103,7 @@ export class RunManager {
   constructor(
     private readonly deps: {
       mondes: MondeRepository;
+      externalExecutions?: ExternalExecutionRepository;
       mons: MonRepository;
       plans?: PlanRepository;
       processSlots?: ProcessSlotRepository;
@@ -242,6 +244,10 @@ export class RunManager {
       this.addWarning(run.id, "dirty_worktree_before_run");
     }
     this.deps.runs.updateLifecycle(run.id, startRunLifecycle(run));
+    const externalExecution = this.deps.externalExecutions?.getByRunId(run.id);
+    if (externalExecution) {
+      this.deps.externalExecutions?.updatePhase(externalExecution.id, "starting");
+    }
     this.deps.events.publish(run.id, "run_started", {
       run_id: run.id,
       runner: scope.harness,
@@ -292,6 +298,13 @@ export class RunManager {
       stalePoll: this.startScopeWarningPoll(run.id, scope, execution.scope_fingerprints)
     });
     this.deps.runs.updateLifecycle(run.id, markRunActive(startingRun));
+    const latestExternal = externalExecution ? this.deps.externalExecutions?.get(externalExecution.id) : undefined;
+    if (latestExternal?.phase === "cancelling") {
+      runningProcess.kill("SIGTERM");
+      this.deps.externalExecutions?.markCancellationSignalled(latestExternal.id);
+    } else if (latestExternal) {
+      this.deps.externalExecutions?.updatePhase(latestExternal.id, "active");
+    }
 
     return { run: this.requireRun(run.id), started: true };
   }
@@ -667,6 +680,88 @@ export class RunManager {
     return started;
   }
 
+  completeExternalExecution(input: {
+    executionId: string;
+    completionDigest: string;
+    completionReceipt?: unknown;
+    manifestId?: string;
+  }) {
+    if (!this.deps.externalExecutions) {
+      throw new Error("External execution repository is unavailable.");
+    }
+    const execution = this.deps.externalExecutions.recordCompletion({
+      id: input.executionId,
+      digest: input.completionDigest,
+      receipt: input.completionReceipt,
+      manifestId: input.manifestId
+    });
+    if (execution.outcome === "succeeded") {
+      const run = this.requireRun(execution.run_id);
+      this.deps.runs.updateLifecycle(run.id, {
+        outcome: "completed",
+        outcome_state: "succeeded",
+        runtime_state: "closed",
+        close_reason: "process_exited",
+        updated_at: new Date().toISOString()
+      });
+      this.deps.events.publish(run.id, "external_execution_completed", {
+        run_id: run.id,
+        external_execution_id: execution.id,
+        completion_digest: execution.completion_digest
+      });
+    }
+    return this.deps.externalExecutions.get(input.executionId)!;
+  }
+
+  cancelExternalExecution(executionId: string) {
+    if (!this.deps.externalExecutions) {
+      throw new Error("External execution repository is unavailable.");
+    }
+    const execution = this.deps.externalExecutions.get(executionId);
+    if (!execution) {
+      throw new Error(`External execution not found: ${executionId}`);
+    }
+    const run = this.requireRun(execution.run_id);
+    const queued = run.status === "queued" || run.status === "blocked";
+    const noActiveProcess = queued || (run.status === "finished" && execution.phase === "awaiting_completion");
+    const requested = this.deps.externalExecutions.requestCancellation(execution.id, noActiveProcess);
+    if (queued) {
+      this.cancelRun(run.id);
+      return this.deps.externalExecutions.get(execution.id)!;
+    }
+    if (noActiveProcess) {
+      this.deps.runs.updateLifecycle(run.id, {
+        outcome: "canceled",
+        runtime_state: "cancelled",
+        outcome_state: "unknown",
+        close_reason: "system_cancelled",
+        updated_at: new Date().toISOString()
+      });
+      return this.deps.externalExecutions.get(execution.id)!;
+    }
+    if (requested.phase === "terminal") {
+      return requested;
+    }
+
+    const running = this.running.get(run.id);
+    if (running) {
+      running.stopRequested = true;
+      running.process.kill("SIGTERM");
+      this.deps.externalExecutions.markCancellationSignalled(execution.id);
+    } else if (run.status === "active") {
+      this.deps.externalExecutions.markFailedByRun(run.id, "cancellation_unacknowledged", "failed");
+    }
+    this.deps.runs.updateLifecycle(run.id, {
+      runtime_state: "cancelling",
+      updated_at: new Date().toISOString()
+    });
+    this.deps.events.publish(run.id, "external_cancellation_requested", {
+      run_id: run.id,
+      external_execution_id: execution.id
+    });
+    return this.deps.externalExecutions.get(execution.id)!;
+  }
+
   isRunTokenAuthorized(runId: string, token: string): boolean {
     const run = this.deps.runs.get(runId);
     if (!run || (run.status !== "starting" && run.status !== "active")) {
@@ -817,6 +912,7 @@ export class RunManager {
         continue;
       }
       this.deps.runs.updateLifecycle(run.id, finishRunInterrupted(run, "lost"));
+      this.deps.externalExecutions?.markProcessLostByRun(run.id);
       this.sealRunWorkspace(run.id);
       this.finalizeWriteEvidence(run.id);
       this.revokeRunToken(run.id);
@@ -831,6 +927,23 @@ export class RunManager {
   }
 
   sweepExpiredRunScopes(now = new Date().toISOString()): void {
+    for (const execution of this.deps.externalExecutions?.expireMissingCompletions(now) ?? []) {
+      const run = this.deps.runs.get(execution.run_id);
+      if (run) {
+        this.deps.runs.updateLifecycle(run.id, {
+          outcome: "failed",
+          outcome_state: "failed",
+          runtime_state: "failed",
+          close_reason: "error",
+          updated_at: now
+        });
+        this.deps.events.publish(run.id, "external_completion_missing", {
+          run_id: run.id,
+          external_execution_id: execution.id,
+          condition: "missing_completion"
+        });
+      }
+    }
     if (!this.deps.runWorkspaces || !this.deps.config.dataDir) {
       return;
     }
@@ -877,8 +990,37 @@ export class RunManager {
       return;
     }
 
-    const patch = running?.stopRequested ? finishRunStopped(current) : finishRunFromExit(current, exit);
+    const external = this.deps.externalExecutions?.getByRunId(runId);
+    const externalUpdated = external
+      ? this.deps.externalExecutions?.recordProcessExit(
+          external.id,
+          { code: exit.code, signal: exit.signal },
+          typeof current.scope_snapshot?.recovery_window_seconds === "number"
+            ? current.scope_snapshot.recovery_window_seconds
+            : 86400
+        )
+      : undefined;
+    const patch = externalUpdated?.outcome === "cancelled"
+      ? { ...finishRunStopped(current), outcome: "canceled" as const }
+      : running?.stopRequested
+        ? finishRunStopped(current)
+        : finishRunFromExit(current, exit);
     this.deps.runs.updateLifecycle(runId, patch);
+    if (externalUpdated?.phase === "awaiting_completion") {
+      this.deps.runs.updateLifecycle(runId, {
+        runtime_state: "awaiting_completion",
+        outcome: "unknown",
+        outcome_state: "unknown",
+        updated_at: new Date().toISOString()
+      });
+    } else if (externalUpdated?.outcome === "succeeded") {
+      this.deps.runs.updateLifecycle(runId, {
+        runtime_state: "closed",
+        outcome: "completed",
+        outcome_state: "succeeded",
+        updated_at: new Date().toISOString()
+      });
+    }
     this.sealRunWorkspace(runId);
     const finished = this.requireRun(runId);
     this.finalizeWriteEvidence(runId);
@@ -911,6 +1053,7 @@ export class RunManager {
     }
 
     this.deps.runs.updateLifecycle(runId, finishRunInterrupted(current, "crashed"));
+    this.deps.externalExecutions?.markFailedByRun(runId, "process_crashed");
     this.sealRunWorkspace(runId);
     const finished = this.requireRun(runId);
     this.finalizeWriteEvidence(runId);

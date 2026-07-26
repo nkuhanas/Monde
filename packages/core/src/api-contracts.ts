@@ -240,3 +240,46 @@ export interface DoctorStatusDto {
 }
 
 export type RunListStatusFilter = RunStatus | "all";
+
+export type ExternalExecutionPhase =
+  | "queued"
+  | "starting"
+  | "active"
+  | "awaiting_completion"
+  | "cancelling"
+  | "terminal";
+
+export type ExternalExecutionOutcome = "succeeded" | "failed" | "cancelled" | null;
+export type ExternalCancellationState =
+  | "none"
+  | "requested"
+  | "signalled"
+  | "acknowledged"
+  | "failed"
+  | "lost";
+
+export interface ExternalExecutionDto {
+  id: string;
+  integration_id: string;
+  external_execution_key: string;
+  request_digest: string;
+  run_id: string;
+  monde_id: string;
+  mon_id: string;
+  phase: ExternalExecutionPhase;
+  outcome: ExternalExecutionOutcome;
+  condition: string | null;
+  cancellation_state: ExternalCancellationState;
+  external_scope: unknown;
+  external_context: unknown;
+  artifact_sink_ref?: unknown;
+  external_lineage?: unknown;
+  local_predecessor_run_id: string | null;
+  process_exited_at: string | null;
+  completion_received_at: string | null;
+  completion_deadline_at: string | null;
+  cancellation_requested_at: string | null;
+  cancellation_acknowledged_at: string | null;
+  created_at: string;
+  updated_at: string;
+}

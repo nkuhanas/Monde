@@ -6,6 +6,7 @@ import { loadServiceConfig } from "./config.js";
 import { openDatabase } from "./db.js";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 import { ArtifactRepository } from "./repositories/artifacts.js";
+import { ExternalExecutionRepository } from "./repositories/external-executions.js";
 import { LogRepository } from "./repositories/logs.js";
 import { MonRepository } from "./repositories/mons.js";
 import { MondeRepository } from "./repositories/mondes.js";
@@ -27,6 +28,7 @@ export async function createService() {
   const app = Fastify({ logger: true });
   const mcpApp = Fastify({ logger: true });
   const mondes = new MondeRepository(database.db);
+  const externalExecutions = new ExternalExecutionRepository(database.db);
   const mons = new MonRepository(database.db);
   const plans = new PlanRepository(database.db);
   const processSlots = new ProcessSlotRepository(database.db);
@@ -41,6 +43,7 @@ export async function createService() {
   const uiPort = Number.parseInt(process.env.MONDE_UI_PORT ?? "5175", 10);
   const runManager = new RunManager({
     mondes,
+    externalExecutions,
     mons,
     plans,
     processSlots,
@@ -113,6 +116,7 @@ export async function createService() {
     database,
     auth,
     mondes,
+    externalExecutions,
     mons,
     plans,
     runs,
