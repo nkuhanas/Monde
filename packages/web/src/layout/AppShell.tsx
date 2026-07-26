@@ -5,7 +5,7 @@ import { Badge, Metric } from "../components/ui";
 import { tabLabel } from "../lib/format";
 import { mondeDisplayName } from "../lib/mon";
 
-export const appTabs = ["overview", "runs", "mons", "plans", "artifacts", "status", "review"] as const;
+export const appTabs = ["overview", "runs", "mons", "plans", "cron", "artifacts", "status", "review"] as const;
 export type ActiveTab = (typeof appTabs)[number];
 
 export interface SidebarMachine {

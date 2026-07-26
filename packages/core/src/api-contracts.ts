@@ -319,3 +319,34 @@ export interface ExecutionManifestDto {
   integration_metadata?: unknown;
   outputs: ExecutionManifestOutputDto[];
 }
+
+export interface CronScheduleDto {
+  id: string;
+  monde_id: string;
+  mon_id: string;
+  name: string;
+  expression: string;
+  timezone: string;
+  title: string;
+  prompt: string;
+  harness_override: string | null;
+  sandbox_mode: string | null;
+  enabled: boolean;
+  next_fire_at: string | null;
+  pending_first_fire_at: string | null;
+  pending_fire_at: string | null;
+  last_scheduled_fire_at: string | null;
+  last_fired_at: string | null;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CronFireDto {
+  id: string;
+  cron_id: string;
+  scheduled_fire_time: string;
+  coalesced_from_fire_time: string | null;
+  fired_at: string;
+  run_id: string;
+}

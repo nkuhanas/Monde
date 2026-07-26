@@ -4,6 +4,7 @@ import type {
   ArtifactDetailDto,
   ArtifactDto,
   BackupInfoDto,
+  CronScheduleDto,
   DoctorStatusDto,
   HealthDto,
   LogEventDto,
@@ -20,6 +21,7 @@ import { RunsWorkspace } from "./features/runs/RunsWorkspace";
 import { ReviewWorkspace } from "./features/runs/ReviewWorkspace";
 import { WorldOverview, type SectorCardModel, type SectorTab } from "./features/overview/WorldOverview";
 import { PlansView } from "./features/plans/PlansView";
+import { CronView } from "./features/cron/CronView";
 import { ArtifactsView } from "./features/artifacts/ArtifactsView";
 import { StatusView } from "./features/status/StatusView";
 import { BottomMonChatRail } from "./features/chat/BottomMonChatRail";
@@ -44,6 +46,7 @@ type Monde = MondeDto;
 type Mon = MonDto;
 type Run = RunDto;
 type Plan = PlanDto;
+type CronSchedule = CronScheduleDto;
 type RunEvent = RunEventDto;
 type LogEvent = LogEventDto;
 type Artifact = ArtifactDto;
@@ -62,6 +65,7 @@ export function App() {
   const [mons, setMons] = useState<Mon[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [cronSchedules, setCronSchedules] = useState<CronSchedule[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [logs, setLogs] = useState<LogEvent[]>([]);
@@ -88,6 +92,13 @@ export function App() {
   const [planTitle, setPlanTitle] = useState("Improve Monde operator console");
   const [planPrompt, setPlanPrompt] = useState("Review the operator console and record one useful improvement.");
   const [planMon, setPlanMon] = useState("");
+  const [cronName, setCronName] = useState("Daily Mon activation");
+  const [cronExpression, setCronExpression] = useState("0 9 * * *");
+  const [cronTimezone, setCronTimezone] = useState(
+    Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+  );
+  const [cronMon, setCronMon] = useState("");
+  const [cronPrompt, setCronPrompt] = useState("Review current Monde work and record the next actionable step.");
   const [artifactPath, setArtifactPath] = useState("");
   const [artifactTitle, setArtifactTitle] = useState("");
   const [artifactType, setArtifactType] = useState("file");
@@ -288,10 +299,15 @@ export function App() {
       if (monde && monde.id !== selectedMondeId) {
         setSelectedMondeId(monde.id);
       }
-      const [monResponse, runResponse, planResponse, artifactResponse, threadResponse, adapterResponse, backupResponse, doctorResponse] = await Promise.all([
+      const [monResponse, runResponse, planResponse, cronResponse, artifactResponse, threadResponse, adapterResponse, backupResponse, doctorResponse] = await Promise.all([
         authFetch<{ mons: Mon[] }>(monde ? `/api/mons?monde_id=${encodeURIComponent(monde.id)}` : "/api/mons"),
         authFetch<{ runs: Run[] }>(monde ? `/api/runs?monde_id=${encodeURIComponent(monde.id)}` : "/api/runs"),
         authFetch<{ plans: Plan[] }>(monde ? `/api/plans?monde_id=${encodeURIComponent(monde.id)}` : "/api/plans"),
+        authFetch<{ schedules: CronSchedule[] }>(
+          monde
+            ? `/api/cron-schedules?monde_id=${encodeURIComponent(monde.id)}`
+            : "/api/cron-schedules"
+        ).catch(() => ({ schedules: [] })),
         authFetch<{ artifacts: Artifact[] }>(monde ? `/api/artifacts?monde_id=${encodeURIComponent(monde.id)}` : "/api/artifacts"),
         monde
           ? authFetch<{ threads: Run[] }>(`/api/mondes/${encodeURIComponent(monde.id)}/threads?runtime_state=open`).catch(() => ({ threads: [] }))
@@ -304,6 +320,7 @@ export function App() {
       setMons(monResponse.mons);
       setRuns(runResponse.runs);
       setPlans(planResponse.plans);
+      setCronSchedules(cronResponse.schedules);
       setAllArtifacts(artifactResponse.artifacts);
       setThreads((current) => mergeServerAndDraftThreads(threadResponse.threads, current));
       setAdapters(adapterResponse.adapters);
@@ -323,6 +340,7 @@ export function App() {
         Object.fromEntries(evidenceEntries.filter((entry): entry is readonly [string, PlanEvidence] => entry[1] !== null))
       );
       if (!planMon && monResponse.mons[0]) setPlanMon(monResponse.mons[0].id);
+      if (!cronMon && monResponse.mons[0]) setCronMon(monResponse.mons[0].id);
       if (!selectedRunId && runResponse.runs[0]) setSelectedRunId(runResponse.runs[0].id);
       setError(null);
     } catch (caught) {
@@ -589,6 +607,49 @@ export function App() {
     await refreshAll();
   }
 
+  async function createCronSchedule(event: FormEvent) {
+    event.preventDefault();
+    if (
+      !currentMonde ||
+      !cronName ||
+      !cronExpression ||
+      !cronTimezone ||
+      !cronMon ||
+      !cronPrompt
+    ) {
+      return;
+    }
+    await authFetch("/api/cron-schedules", {
+      method: "POST",
+      body: JSON.stringify({
+        monde_id: currentMonde.id,
+        mon_id: cronMon,
+        name: cronName,
+        expression: cronExpression,
+        timezone: cronTimezone,
+        title: cronName,
+        prompt: cronPrompt,
+        enabled: true
+      })
+    });
+    await refreshAll();
+  }
+
+  async function toggleCronSchedule(schedule: CronSchedule) {
+    await authFetch(`/api/cron-schedules/${encodeURIComponent(schedule.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled: !schedule.enabled })
+    });
+    await refreshAll();
+  }
+
+  async function archiveCronSchedule(schedule: CronSchedule) {
+    await authFetch(`/api/cron-schedules/${encodeURIComponent(schedule.id)}`, {
+      method: "DELETE"
+    });
+    await refreshAll();
+  }
+
   async function registerArtifact(event: FormEvent) {
     event.preventDefault();
     if (!selectedRun || !artifactType) return;
@@ -824,6 +885,13 @@ export function App() {
         ? { selected_entity_type: "run", selected_entity_id: selectedRun.id }
         : activeTab === "plans" && plans[0]
           ? { selected_entity_type: "plan", visible_entity_ids: plans.map((plan) => plan.id).slice(0, 25) }
+          : activeTab === "cron" && cronSchedules[0]
+            ? {
+                selected_entity_type: "cron_schedule",
+                visible_entity_ids: cronSchedules
+                  .map((schedule) => schedule.id)
+                  .slice(0, 25)
+              }
           : activeTab === "artifacts" && allArtifacts[0]
             ? { selected_entity_type: "artifact", visible_entity_ids: allArtifacts.map((artifact) => artifact.id).slice(0, 25) }
             : activeTab === "mons" && mons[0]
@@ -941,6 +1009,27 @@ export function App() {
               onOpenRun={(runId) => { setSelectedRunId(runId); setActiveTab("review"); }}
               onStartRun={(run) => void startRun(run)}
               onActivate={(plan) => void activatePlan(plan)}
+            />
+          ) : null}
+
+          {activeTab === "cron" ? (
+            <CronView
+              schedules={cronSchedules}
+              mons={mons}
+              canCreate={Boolean(currentMonde)}
+              name={cronName}
+              setName={setCronName}
+              expression={cronExpression}
+              setExpression={setCronExpression}
+              timezone={cronTimezone}
+              setTimezone={setCronTimezone}
+              monId={cronMon}
+              setMonId={setCronMon}
+              prompt={cronPrompt}
+              setPrompt={setCronPrompt}
+              onCreate={(event) => void createCronSchedule(event)}
+              onToggle={(schedule) => void toggleCronSchedule(schedule)}
+              onArchive={(schedule) => void archiveCronSchedule(schedule)}
             />
           ) : null}
 

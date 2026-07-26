@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 
-export const schemaVersion = 10;
+export const schemaVersion = 11;
 
 export interface MondeDatabase {
   db: DatabaseSync;
@@ -392,6 +392,50 @@ export function migrateDatabase(db: DatabaseSync): void {
 
         CREATE INDEX IF NOT EXISTS execution_manifests_run_idx
           ON execution_manifests(run_id);
+      `);
+    }
+
+    if (current < 11) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS cron_schedules (
+          id TEXT PRIMARY KEY,
+          monde_id TEXT NOT NULL REFERENCES mondes(id) ON DELETE CASCADE,
+          mon_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          expression TEXT NOT NULL,
+          timezone TEXT NOT NULL,
+          title TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          harness_override TEXT,
+          sandbox_mode TEXT,
+          enabled INTEGER NOT NULL,
+          next_fire_at TEXT,
+          pending_first_fire_at TEXT,
+          pending_fire_at TEXT,
+          last_scheduled_fire_at TEXT,
+          last_fired_at TEXT,
+          archived_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS cron_schedules_due_idx
+          ON cron_schedules(enabled, next_fire_at);
+        CREATE INDEX IF NOT EXISTS cron_schedules_monde_idx
+          ON cron_schedules(monde_id, mon_id, name);
+
+        CREATE TABLE IF NOT EXISTS cron_fires (
+          id TEXT PRIMARY KEY,
+          cron_id TEXT NOT NULL REFERENCES cron_schedules(id) ON DELETE CASCADE,
+          scheduled_fire_time TEXT NOT NULL,
+          coalesced_from_fire_time TEXT,
+          fired_at TEXT NOT NULL,
+          run_id TEXT NOT NULL UNIQUE REFERENCES runs(id) ON DELETE CASCADE,
+          UNIQUE(cron_id, scheduled_fire_time)
+        );
+
+        CREATE INDEX IF NOT EXISTS cron_fires_schedule_idx
+          ON cron_fires(cron_id, fired_at);
       `);
     }
 

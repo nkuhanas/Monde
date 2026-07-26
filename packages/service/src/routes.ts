@@ -15,6 +15,7 @@ import type { RunCloseReason, RunRecord } from "@monde/core";
 import { harnessAdapters } from "@monde/adapters";
 import type { ServiceAuth } from "./auth.js";
 import { ArtifactRepository } from "./repositories/artifacts.js";
+import { CronScheduleRepository } from "./repositories/cron-schedules.js";
 import {
   ExternalExecutionConflictError,
   ExternalExecutionRepository
@@ -124,6 +125,7 @@ export interface RouteDeps {
   database: MondeDatabase;
   auth: ServiceAuth;
   mondes: MondeRepository;
+  cronSchedules: CronScheduleRepository;
   externalExecutions: ExternalExecutionRepository;
   externalMcpGrants: ExternalMcpGrantRepository;
   executionManifests: ExecutionManifestRepository;
@@ -205,6 +207,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
   const {
     auth,
     mondes,
+    cronSchedules,
     mons,
     plans,
     runs,
@@ -324,7 +327,121 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     if (!deleted) {
       return reply.code(404).send({ error: "mon_not_found" });
     }
+    cronSchedules.disableForMon(params.mondeId, params.monId);
 
+    return reply.code(204).send();
+  });
+
+  app.get("/cron-schedules", async (request) => {
+    const query = request.query as { monde_id?: string };
+    return {
+      schedules: cronSchedules.list(query.monde_id)
+    };
+  });
+
+  app.post("/cron-schedules", async (request, reply) => {
+    const body = z
+      .object({
+        monde_id: z.string().min(1),
+        mon_id: z.string().min(1),
+        name: z.string().min(1).max(128),
+        expression: z.string().min(1).max(128),
+        timezone: z.string().min(1).max(128).default("UTC"),
+        title: z.string().min(1).max(512),
+        prompt: z.string().min(1).max(1024 * 1024),
+        harness_override: z.string().min(1).max(128).optional(),
+        sandbox_mode: z.string().min(1).max(128).optional(),
+        enabled: z.boolean().default(true)
+      })
+      .strict()
+      .parse(request.body);
+    if (!mondes.get(body.monde_id) || !mons.get(body.monde_id, body.mon_id)) {
+      return reply.code(404).send({ error: "cron_target_not_found" });
+    }
+    try {
+      const schedule = cronSchedules.create({
+        mondeId: body.monde_id,
+        monId: body.mon_id,
+        name: body.name,
+        expression: body.expression,
+        timezone: body.timezone,
+        title: body.title,
+        prompt: body.prompt,
+        harnessOverride: body.harness_override,
+        sandboxMode: body.sandbox_mode,
+        enabled: body.enabled
+      });
+      return reply.code(201).send({ schedule });
+    } catch (error) {
+      return reply.code(422).send({
+        error: "invalid_cron_schedule",
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.get("/cron-schedules/:id", async (request, reply) => {
+    const params = request.params as { id: string };
+    const schedule = cronSchedules.get(params.id);
+    if (!schedule || schedule.archived_at) {
+      return reply.code(404).send({ error: "cron_schedule_not_found" });
+    }
+    return {
+      schedule,
+      fires: cronSchedules.listFires(schedule.id)
+    };
+  });
+
+  app.patch("/cron-schedules/:id", async (request, reply) => {
+    const params = request.params as { id: string };
+    const current = cronSchedules.get(params.id);
+    if (!current || current.archived_at) {
+      return reply.code(404).send({ error: "cron_schedule_not_found" });
+    }
+    const body = z
+      .object({
+        mon_id: z.string().min(1).optional(),
+        name: z.string().min(1).max(128).optional(),
+        expression: z.string().min(1).max(128).optional(),
+        timezone: z.string().min(1).max(128).optional(),
+        title: z.string().min(1).max(512).optional(),
+        prompt: z.string().min(1).max(1024 * 1024).optional(),
+        harness_override: z.string().min(1).max(128).nullable().optional(),
+        sandbox_mode: z.string().min(1).max(128).nullable().optional(),
+        enabled: z.boolean().optional()
+      })
+      .strict()
+      .parse(request.body);
+    if (body.mon_id && !mons.get(current.monde_id, body.mon_id)) {
+      return reply.code(404).send({ error: "cron_target_not_found" });
+    }
+    try {
+      return {
+        schedule: cronSchedules.update(params.id, {
+          monId: body.mon_id,
+          name: body.name,
+          expression: body.expression,
+          timezone: body.timezone,
+          title: body.title,
+          prompt: body.prompt,
+          harnessOverride: body.harness_override,
+          sandboxMode: body.sandbox_mode,
+          enabled: body.enabled
+        })
+      };
+    } catch (error) {
+      return reply.code(422).send({
+        error: "invalid_cron_schedule",
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  app.delete("/cron-schedules/:id", async (request, reply) => {
+    const params = request.params as { id: string };
+    if (!cronSchedules.delete(params.id)) {
+      return reply.code(404).send({ error: "cron_schedule_not_found" });
+    }
     return reply.code(204).send();
   });
 

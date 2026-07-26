@@ -3440,7 +3440,8 @@ textarea {
 
 .run-card,
 .mon-entity,
-.plan-card {
+.plan-card,
+.cron-card {
   min-width: 0;
   border: 1px solid var(--monde-border);
   border-radius: var(--radius-card);
@@ -3459,7 +3460,8 @@ textarea {
 
 .run-card:hover,
 .mon-entity:hover,
-.plan-card:hover {
+.plan-card:hover,
+.cron-card:hover {
   border-color: var(--monde-border-strong);
   box-shadow: var(--monde-shadow-strong);
 }
@@ -3473,6 +3475,7 @@ textarea {
 .run-card-footer,
 .run-card-meta,
 .plan-card-meta,
+.cron-card-meta,
 .review-actions,
 .entity-actions,
 .entity-meta,
@@ -3497,7 +3500,8 @@ textarea {
 
 .run-card h4,
 .mon-entity h4,
-.plan-card h4 {
+.plan-card h4,
+.cron-card h4 {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3530,7 +3534,8 @@ textarea {
 }
 
 .mon-entity-grid,
-.plan-grid {
+.plan-grid,
+.cron-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 14px;
@@ -3679,6 +3684,7 @@ textarea {
 }
 
 .plan-create,
+.cron-create,
 .artifact-create {
   display: grid;
   grid-template-columns: minmax(140px, 1.1fr) minmax(120px, 0.7fr) minmax(180px, 1.5fr) auto;
@@ -3689,6 +3695,65 @@ textarea {
 .plan-card {
   display: grid;
   gap: 12px;
+}
+
+.cron-create {
+  grid-template-columns:
+    minmax(140px, 1fr)
+    minmax(120px, 0.7fr)
+    minmax(140px, 0.8fr)
+    minmax(130px, 0.7fr)
+    minmax(220px, 1.5fr)
+    auto;
+}
+
+.cron-card {
+  display: grid;
+  gap: 12px;
+}
+
+.cron-card p {
+  color: #697789;
+}
+
+.cron-card-meta,
+.cron-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.cron-card-meta code {
+  border-radius: 6px;
+  background: #f3f6f9;
+  padding: 4px 7px;
+}
+
+.cron-times {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+
+.cron-times div {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.cron-times dt {
+  color: #697789;
+  font-size: 12px;
+}
+
+.cron-times dd {
+  margin: 0;
+  font-size: 12px;
+}
+
+.cron-actions {
+  justify-content: flex-end;
 }
 
 .card-kicker {
@@ -5136,6 +5201,7 @@ pre {
   .world-overview,
   .right-world-panel,
   .plan-create,
+  .cron-create,
   .assignment-row,
   .artifact-row,
   .artifact-create,

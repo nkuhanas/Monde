@@ -3,9 +3,11 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { loadOrCreateServiceAuth } from "./auth.js";
 import { loadServiceConfig } from "./config.js";
+import { CronScheduler } from "./cron-scheduler.js";
 import { openDatabase } from "./db.js";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 import { ArtifactRepository } from "./repositories/artifacts.js";
+import { CronScheduleRepository } from "./repositories/cron-schedules.js";
 import { ExternalExecutionRepository } from "./repositories/external-executions.js";
 import { ExternalMcpGrantRepository } from "./repositories/external-mcp-grants.js";
 import { ExecutionManifestRepository } from "./repositories/execution-manifests.js";
@@ -30,6 +32,7 @@ export async function createService() {
   const app = Fastify({ logger: true });
   const mcpApp = Fastify({ logger: true });
   const mondes = new MondeRepository(database.db);
+  const cronSchedules = new CronScheduleRepository(database.db);
   const externalExecutions = new ExternalExecutionRepository(database.db);
   const externalMcpGrants = new ExternalMcpGrantRepository(database.db);
   const executionManifests = new ExecutionManifestRepository(database.db);
@@ -66,6 +69,12 @@ export async function createService() {
   });
   runManager.markLostRunsOnStartup();
   runManager.sweepExpiredRunScopes();
+  const cronScheduler = new CronScheduler(
+    cronSchedules,
+    runManager,
+    15_000,
+    (error) => app.log.error(error, "cron scheduler tick failed")
+  );
   const runScopeSweep = setInterval(() => runManager.sweepExpiredRunScopes(), 60_000);
   runScopeSweep.unref();
   const tools = new ToolHandlers({ runs, plans, logs, artifacts });
@@ -122,6 +131,7 @@ export async function createService() {
     database,
     auth,
     mondes,
+    cronSchedules,
     externalExecutions,
     externalMcpGrants,
     executionManifests,
@@ -141,6 +151,7 @@ export async function createService() {
       ensureDirectory(paths.runtimeDir);
       await app.listen({ host: config.host, port: config.webPort });
       await mcpApp.listen({ host: config.host, port: config.mcpPort });
+      cronScheduler.start();
       fs.writeFileSync(
         paths.metadataPath,
         JSON.stringify(
@@ -158,6 +169,7 @@ export async function createService() {
     },
     async stop() {
       clearInterval(runScopeSweep);
+      cronScheduler.stop();
       await app.close();
       await mcpApp.close();
       database.close();
