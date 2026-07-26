@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { loadOrCreateServiceAuth } from "./auth.js";
@@ -156,6 +157,7 @@ export async function createService() {
         paths.metadataPath,
         JSON.stringify(
           {
+            machine_name: os.hostname(),
             web_addr: serviceAddr,
             mcp_addr: mcpAddr,
             token_path: paths.tokenPath,

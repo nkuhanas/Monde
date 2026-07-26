@@ -17,6 +17,7 @@ export type DoctorFindingLevel = "ok" | "warn" | "error";
 export interface HealthDto {
   ok: boolean;
   service: "monde";
+  machine_name?: string;
   db_path: string;
   schema_version?: number;
 }

@@ -360,6 +360,16 @@ textarea {
   background: rgba(255, 255, 255, 0.48);
 }
 
+.machine-header-local {
+  background: linear-gradient(100deg, rgba(223, 238, 255, 0.82), rgba(255, 255, 255, 0.42));
+  box-shadow: inset 0 0 0 1px rgba(83, 133, 214, 0.16);
+}
+
+.machine-header-local:hover:not(:disabled) {
+  background: linear-gradient(100deg, rgba(213, 233, 255, 0.94), rgba(255, 255, 255, 0.58));
+  box-shadow: inset 0 0 0 1px rgba(57, 111, 204, 0.24);
+}
+
 .machine-chevron {
   position: relative;
   width: 16px;
@@ -417,6 +427,13 @@ textarea {
   height: 29px;
 }
 
+.machine-identity {
+  min-width: 0;
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
 .machine-name {
   min-width: 0;
   overflow: hidden;
@@ -424,6 +441,21 @@ textarea {
   white-space: nowrap;
   font-size: 15px;
   font-weight: 800;
+}
+
+.machine-local-badge {
+  flex: 0 0 auto;
+  border: 1px solid rgba(36, 103, 209, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.82);
+  color: #2455ad;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.035em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .machine-count {

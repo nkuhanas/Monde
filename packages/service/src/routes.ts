@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -285,6 +286,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
   app.get("/health", async () => ({
     ok: true,
     service: "monde",
+    machine_name: os.hostname(),
     db_path: getPlatformPaths().dbPath,
     schema_version: schemaVersion
   }));

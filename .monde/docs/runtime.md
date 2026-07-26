@@ -71,11 +71,15 @@ MONDE_HITL_TURN_TIMEOUT_MS
 Service metadata includes:
 
 ```text
+machine_name
 web_addr
 mcp_addr
 token_path
 db_path
 ```
+
+`GET /health.machine_name` is the local operating-system hostname used for
+current-machine presentation. It is not yet a persisted cross-machine identity.
 
 Use:
 

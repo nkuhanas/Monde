@@ -27,6 +27,10 @@ Frontend code should import these as type-only contracts instead of redefining
 local copies. Backend changes that alter these shapes should update
 `api-contracts.ts` and the web UI in the same change.
 
+`GET /health` includes `machine_name`, sourced from the local service host. The
+web UI uses it as presentation identity for the current machine; it is not a
+durable cross-machine identifier.
+
 ## Stable Read Endpoints
 
 ```text

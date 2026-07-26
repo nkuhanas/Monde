@@ -11,6 +11,7 @@ export type ActiveTab = (typeof appTabs)[number];
 export interface SidebarMachine {
   id: string;
   displayName: string;
+  isLocal: boolean;
   online: boolean;
   mondes: MondeDto[];
 }
@@ -51,10 +52,10 @@ export function AppShell({ activeTab, onSelectTab, machines, collapsedMachines, 
             {machines.map((machine) => {
               const collapsed = Boolean(collapsedMachines[machine.id]);
               return (
-                <section className="machine-section" key={machine.id}>
-                  <button className="machine-header" type="button" aria-expanded={!collapsed} onClick={() => onToggleMachine(machine.id)}>
+                <section className={machine.isLocal ? "machine-section machine-section-local" : "machine-section"} key={machine.id}>
+                  <button className={machine.isLocal ? "machine-header machine-header-local" : "machine-header"} type="button" aria-expanded={!collapsed} onClick={() => onToggleMachine(machine.id)}>
                     <span className={collapsed ? "machine-chevron machine-chevron-collapsed" : "machine-chevron"} aria-hidden="true" />
-                    <span className="machine-icon" aria-hidden="true"><UiIcon name="machine" /></span><span className="machine-name">{machine.displayName}</span><span className="machine-count">{machine.mondes.length} monde{machine.mondes.length === 1 ? "" : "s"}</span>
+                    <span className="machine-icon" aria-hidden="true"><UiIcon name="machine" /></span><span className="machine-identity"><span className="machine-name">{machine.displayName}</span>{machine.isLocal ? <span className="machine-local-badge">This machine</span> : null}</span><span className="machine-count">{machine.mondes.length} monde{machine.mondes.length === 1 ? "" : "s"}</span>
                   </button>
                   {!collapsed ? <div className="monde-list">
                     {machine.mondes.map((monde) => <button className={monde.id === currentMonde?.id ? "monde-row monde-row-active" : "monde-row"} type="button" key={monde.id} onClick={() => onSelectMonde(monde.id)}>

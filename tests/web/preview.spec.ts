@@ -53,8 +53,9 @@ test("renders an isolated authenticated operator overview", async ({ page, reque
 
   const healthResponse = await request.get("/api/health", { headers });
   expect(healthResponse.status()).toBe(200);
-  const health = (await healthResponse.json()) as { db_path?: string };
+  const health = (await healthResponse.json()) as { db_path?: string; machine_name?: string };
   expect(health.db_path).toBe(path.join(testRoot, "data", "monde", "monde.sqlite"));
+  expect(health.machine_name).toBeTruthy();
 
   page.on("console", (message) => {
     if (message.type() === "error") {
@@ -81,6 +82,8 @@ test("renders an isolated authenticated operator overview", async ({ page, reque
   await expect(page.locator(".service-dot-online")).toBeVisible();
   await expect(page.getByText("Enter the local service token to load Monde state.")).toHaveCount(0);
   await expect(page.locator(".workspace-title h2")).toHaveText("Preview Smoke");
+  await expect(page.locator(".machine-local-badge")).toHaveText("This machine");
+  await expect(page.locator(".machine-name")).toHaveText(health.machine_name ?? "");
   await expect(page.locator(".monde-row-active .monde-name")).toHaveText("Preview Smoke");
   await expect(page.locator(".recent-mon-row")).toContainText("frontend.mon");
 

@@ -36,10 +36,11 @@ The sidebar intentionally does not list mons. Mons are actors inside a selected
 Monde and are shown in the Mons tab and chat launcher.
 
 Until authenticated machine inventory and deployment identity exist, every
-Monde returned by the local service belongs to the single `Local Machine`
-section. Do not derive machine placement from Monde names or filesystem paths.
-Future VM deployments should supply explicit machine records through the
-service.
+Monde returned by the local service belongs to the first machine section. That
+section uses the service hostname (`dev-vm` in development) and a
+`This machine` treatment. Do not derive machine placement from Monde names or
+filesystem paths. Future VM deployments should supply explicit machine records
+through the service while keeping the current local machine first.
 
 ## Current UX Conventions
 

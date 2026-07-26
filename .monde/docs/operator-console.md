@@ -16,15 +16,18 @@ bottom rail        human-in-the-loop mon chat launcher and thread widgets
 overlay layer      reusable confirmation prompts
 ```
 
-The sidebar currently has one `Local Machine` group containing every Monde
-registered with the local service. It does not infer machine identity from a
-Monde ID, name, root path, or Mon names.
+The sidebar currently puts the local service machine first and labels it from
+`GET /health.machine_name` (`dev-vm` in the current development deployment).
+It has a distinct `This machine` badge and contains every Monde registered with
+that service. It does not infer machine identity from a Monde ID, name, root
+path, or Mon names.
 
 Real multi-machine grouping is deferred until Monde has authenticated machine
 inventory plus CI/CD and deployment identity. At that point the service should
 provide machine records explicitly; the frontend must not invent remote
-machines from naming conventions. Monde names, not Mon names, are shown under
-each machine.
+machines from naming conventions. The current local machine remains first when
+that inventory arrives. Monde names, not Mon names, are shown under each
+machine.
 
 ## Overview
 
