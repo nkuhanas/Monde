@@ -225,6 +225,32 @@ available slots after a process exits or queued work is cancelled.
 HITL adapter turns reserve process capacity only while their process turn is
 actually active. An open thread does not permanently occupy a process slot.
 
+## Stable-Key Integration Runs
+
+The narrow integration surface provides idempotent process execution without
+adding caller-domain schemas to Monde:
+
+```text
+POST /mondes/:mondeId/integrations/:integrationId/runs
+GET  /mondes/:mondeId/integrations/:integrationId/runs/:executionKey
+POST /mondes/:mondeId/integrations/:integrationId/runs/:executionKey/cancel
+```
+
+The request contains an execution key, Mon ID, and one bounded opaque context
+packet. Monde canonicalizes and hashes the request server-side. Concurrent
+replays of the same key and digest resolve to one durable run and at most one
+process launch; a different digest for the same integration/key conflicts.
+
+These runs use `completion_policy = process_exit`. A clean acknowledged exit
+produces `succeeded` without a completion callback or execution manifest.
+Non-zero exit, process loss, and acknowledged cancellation remain distinct
+operational results. Callers own any later domain-output validation.
+
+The broader `/external-executions` surface remains available for generic
+integrations that intentionally select receipt-gated completion, external
+lineage metadata, or Monde execution manifests. Those optional capabilities
+are not prerequisites for the stable-key process-exit path.
+
 ## Cron Scheduler
 
 Generic cron is a Monde capability. Five-field expressions are evaluated in
@@ -237,7 +263,8 @@ policy, or model/machine routing.
 
 ## Runtime Events
 
-Run events preserve both process output and HITL messages:
+Run events preserve process output, integration lifecycle evidence, run-scope
+lifecycle, and HITL messages. Representative event names are:
 
 ```text
 run_started
@@ -247,6 +274,21 @@ run_error_output
 warning_added
 run_process_exit
 run_finished
+external_execution_start_failed
+external_execution_completed
+external_completion_missing
+external_cancellation_requested
+execution_manifest_registered
+execution_manifest_replayed
+run_scope_sealed
+run_scope_cleaned
+run_scope_cleanup_failed
+thread_turn_started
+thread_turn_activity
+thread_turn_idle_timeout
+thread_turn_hard_timeout
+thread_turn_finished
+thread_turn_failed
 user_message
 mon_message
 system_message

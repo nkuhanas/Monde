@@ -123,8 +123,10 @@ On timeout, Monde:
 
 1. records the timeout reason and last activity
 2. publishes the reason-specific timeout event
-3. sends `SIGTERM` to the adapter process
-4. schedules `SIGKILL` after the configured grace period
+3. sends `SIGTERM` to the spawned process group on POSIX, or the direct child
+   where process groups are unavailable
+4. schedules `SIGKILL` against the same target after the configured grace
+   period
 5. rejects the turn and revokes its run-scoped token
 
 ## UI Behavior
@@ -149,6 +151,7 @@ Focused tests cover:
 - run-scoped/MCP activity resetting the idle timer
 - idle timeout metadata, events, and termination
 - hard timeout despite repeated activity
+- termination of descendants through POSIX process-group signaling
 - the legacy turn-timeout environment fallback
 - distinct idle and hard timeout copy in the chat view model
 

@@ -40,6 +40,7 @@ Runs:
 
 - active, queued, warning-bearing, and reviewable runs
 - lifecycle/process/outcome fields
+- stable-key integration identity and generic operational evidence
 - runtime state for HITL threads
 - runner, harness, input mode, and write metadata
 
@@ -149,8 +150,16 @@ The overlay supports:
 
 ## Review And Outcome
 
-Process completion is not semantic completion. A run can be
-`finished/exited/unknown` until an operator reviews it.
+Ordinary operator, plan, and cron runs can be
+`finished/exited/unknown` until an operator reviews them. Optional
+`external_receipt` executions likewise remain `awaiting_completion` until the
+integration supplies an idempotent receipt.
+
+Stable-key integration runs with `completion_policy = process_exit` are
+different: a clean acknowledged process exit is Monde operational success and
+the integration snapshot becomes `succeeded` without an operator review,
+completion callback, or manifest. Any later domain-output validation belongs
+to the integration and does not rewrite Monde's process outcome.
 
 Run review records:
 
@@ -160,7 +169,8 @@ Run review records:
 - `run.result.notes`
 - audit log entries
 
-The UI should keep outcome review explicit and should not hide uncertainty.
+The UI should keep outcome review explicit where it applies and should not
+mislabel downstream domain validation as Monde run review.
 
 ## Write Evidence
 

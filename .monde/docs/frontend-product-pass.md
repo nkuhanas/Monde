@@ -22,6 +22,7 @@ Main workspace
   Runs
   Mons
   Plans
+  Cron
   Artifacts
   Status
   Review
@@ -62,7 +63,8 @@ Run Review should make these fields obvious:
 - origin and why the run exists
 - intent title and prompt
 - lifecycle/process/outcome
-- `finished/exited/unknown` review warning
+- `finished/exited/unknown` review warning for ordinary review-governed runs
+- stable-key integration status without implying downstream domain validation
 - runner, runner type, interaction mode, input mode, output mode
 - write/sandbox/approval metadata
 - terminal/output stream

@@ -104,8 +104,9 @@ npm test
 ```
 
 The suite covers process-slot concurrency, isolated scope snapshots and
-cleanup, external execution idempotency/lifecycle, external MCP grants and
-stdio containment, immutable manifests, cron coalescing/timezones, and backup
+cleanup, stable-key process-exit integration runs, optional receipt-gated
+external execution, process-group cancellation, external MCP grants and stdio
+containment, immutable manifests, cron coalescing/timezones, and backup
 rehearsal.
 
 The deterministic smoke gate builds once, does not invoke external agent
@@ -139,7 +140,10 @@ monde adapter verify-isolation codex
 The second command is the required release/manual gate before advertising the
 current Codex installation as isolation-capable. It runs a real sibling-access
 denial probe for Codex and an isolated stdio MCP child, then stores a local
-attestation bound to the relevant binary and host fingerprint.
+attestation bound to the Codex and bubblewrap binaries, Monde sandbox-policy
+hash, Node version, OS/kernel release, platform, and architecture. A change to
+any of those inputs invalidates isolated-run admission until verification is
+run again.
 
 Smoke tests create temporary Monde roots and runtime state. They should not
 depend on the operator's active local SQLite DB.

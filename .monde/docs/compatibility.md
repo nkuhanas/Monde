@@ -52,16 +52,16 @@ behavior. The narrow integration-run endpoint creates `process_exit` rows.
 ## Isolation Compatibility
 
 Shared workspaces remain available. Isolated mode is adapter capability-gated.
-For Codex, the installed Codex binary, bubblewrap binary, operating-system
-release, and architecture must match a successful local attestation:
+For Codex, the installed binaries, sandbox policy, and relevant host/runtime
+identity must match a successful local attestation:
 
 ```bash
 monde adapter verify-isolation codex
 ```
 
-Changing those components invalidates the attestation until it is rerun.
 The fingerprint includes Codex and bubblewrap binary hashes, the Monde sandbox
-policy, Node version, OS/kernel release, platform, and architecture.
+policy, Node version, OS/kernel release, platform, and architecture. Changing
+any of those inputs invalidates the attestation until it is rerun.
 
 ## Backup Compatibility
 

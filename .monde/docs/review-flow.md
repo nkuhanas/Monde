@@ -1,10 +1,22 @@
 # Review Flow
 
-Run review is the operator path for turning process evidence into semantic
-outcome.
+Run review is the operator path for turning process evidence from ordinary
+operator, plan, and cron runs into an operator-reviewed outcome.
 
 A process can finish cleanly while the outcome remains `unknown`. Review
 records result data and appends audit evidence.
+
+This review gate does not apply to stable-key integration runs created through
+the narrow integration API. Those runs use `completion_policy = process_exit`:
+a clean acknowledged exit becomes Monde operational success immediately. The
+caller may subsequently reject domain output in its own state without changing
+the Monde run from `succeeded`.
+
+The broader generic external-execution API can instead opt into
+`completion_policy = external_receipt`. That path remains
+`awaiting_completion` after a clean exit until the integration provides its
+idempotent opaque receipt. It is a separate machine-to-machine lifecycle, not
+an operator review requirement.
 
 ## One-Shot Run Review
 

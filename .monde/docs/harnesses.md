@@ -63,6 +63,12 @@ It is useful for proving:
 - stop/interrupt controls
 - artifact and log registration
 
+On POSIX, Monde starts each adapter launch in its own process group. Stop,
+external cancellation, and HITL timeout signaling target that group so a shell,
+Codex process, or MCP child does not survive merely because it is a descendant
+of the direct child. Platforms without POSIX process groups fall back to
+signaling the direct child.
+
 ## Codex
 
 The Codex adapter launches `codex exec` when the Codex CLI is installed.
@@ -115,8 +121,8 @@ current context snapshot read-only and current scratch writable, and grants
 configured read mounts read-only. Codex sandbox behavior is enforced by Codex;
 isolated stdio MCP children receive an independent bubblewrap profile.
 The fingerprint also covers the Monde isolation-policy hash and Node runtime,
-so a policy or relevant runtime change invalidates admission until verification
-is rerun.
+plus OS/kernel release, platform, and architecture, so a policy, binary, or
+relevant runtime change invalidates admission until verification is rerun.
 
 ## External MCP Servers
 
@@ -174,4 +180,5 @@ Harness prompts include Monde runtime context and steer models toward:
 - searching docs with `search_docs`
 - registering artifacts
 - writing typed logs
-- not overclaiming semantic completion
+- not confusing a successful integration process with caller-owned domain
+  validation

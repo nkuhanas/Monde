@@ -245,7 +245,7 @@ Detailed docs live in `.monde/docs/`:
 - `.monde/docs/api-contracts.md` - frontend/backend DTO and endpoint contracts
 - `.monde/docs/harness-liveness.md` - HITL idle and hard timeout model
 - `.monde/docs/security-model.md` - local trust boundary, scope, environment, auth
-- `.monde/docs/tea-party-integration.md` - generic external execution API and examples
+- `.monde/docs/tea-party-integration.md` - TeaParty v1 stable-key start, inspect, cancel, and process-exit contract
 - `.monde/docs/tea-party-acceptance.md` - implementation-to-test acceptance map
 - `.monde/docs/compatibility.md` - defaults and schema migration behavior
 - `.monde/docs/backup-restore.md` - checksum verification and isolated rehearsal
@@ -259,7 +259,7 @@ Monde is MVP local operator runtime software. The current focus is:
 - making local agent work visually legible
 - hardening HITL chat and run review flows
 - improving write evidence and artifact review
-- hardening the generic external-execution substrate
+- hardening stable-key integration runs and the optional external-receipt substrate
 - expanding harness support without weakening scoped permissions
 - keeping setup and recovery clear for local-first use
 

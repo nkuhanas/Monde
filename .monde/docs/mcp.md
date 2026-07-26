@@ -67,6 +67,12 @@ audience
 expires_at
 ```
 
+Stable-key integration runs use these same grant mechanics. Their claims carry
+the configured integration ID and execution key; `external_scope` is null on
+the narrow process-exit endpoint. The bounded opaque context packet is
+persisted and prompt-forwarded separately. Monde does not parse it into queue,
+lease, persona, pipeline, artifact, or lineage claims.
+
 Authenticated streamable-HTTP servers must use a loopback URL in v1 so they
 can reach the local introspection endpoint. An external stdio server receives
 only its declared token variable and introspection address. During isolated
@@ -119,4 +125,7 @@ audit
 ```
 
 `register_artifact` stores path references, not immutable blobs. The service
-reports current path status so missing or inaccessible artifacts remain visible.
+reports current path status so missing or inaccessible artifacts remain
+visible. The optional execution-manifest API is a separate generic
+metadata/reference facility and is not required for a stable-key process-exit
+integration run.

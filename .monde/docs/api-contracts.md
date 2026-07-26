@@ -119,8 +119,9 @@ diff_capture
 terminal
 ```
 
-The UI should not infer semantic completion from process exit. Use
-`status`, `process_status`, and `outcome` together for one-shot run state.
+For ordinary review-governed runs, the UI should not infer semantic completion
+from process exit. Use `status`, `process_status`, and `outcome` together for
+their one-shot run state.
 
 The narrow integration-run surface exposes:
 

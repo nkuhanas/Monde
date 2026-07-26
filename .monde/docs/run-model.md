@@ -4,12 +4,14 @@ Plan, cron, external integration, operator, and system intent sources create
 runs.
 
 Runs produce typed logs, raw output events, path-referenced artifacts, and
-result summaries or review notes. A clean process exit does not automatically
-mean the semantic outcome is completed.
+result summaries or review notes. For ordinary review-governed runs, a clean
+process exit does not automatically mean the operator has accepted the
+semantic outcome. Stable-key integration runs have a separate process-exit
+projection described below.
 
 ## Core Fields
 
-One-shot runs use the v2.5 lifecycle split:
+Ordinary one-shot runs use the v2.5 lifecycle split:
 
 ```text
 status           Monde lifecycle placement
@@ -40,8 +42,8 @@ close_reason = process_exited
 ```
 
 `outcome = unknown` and `outcome_state = unknown` must agree after a clean
-one-shot exit. A migration repairs older rows that paired an unknown outcome
-with `outcome_state = succeeded`.
+ordinary one-shot exit. A migration repairs older rows that paired an unknown
+outcome with `outcome_state = succeeded`.
 
 ## One-Shot Runs And HITL Threads
 

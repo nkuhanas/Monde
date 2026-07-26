@@ -17,7 +17,10 @@ Monde stores write metadata on `run.execution`:
 - `approval_mode`
 - `diff_capture`
 
-For Codex, `write_scope` is the resolved mon `work_root`.
+For a shared Codex run, `write_scope` is the resolved Mon `work_root`. For an
+isolated Codex run, it is the run's unique scratch directory. The immutable
+actor-context snapshot and configured read mounts remain read-only and are not
+part of the writable scope.
 
 This is adapter-specific. `basic-process` does not implement an OS sandbox:
 its declared work root is context and a working directory, not an enforced
@@ -49,10 +52,17 @@ Artifacts are path references. The service reports:
 - file size when available
 
 Monde does not copy artifact files into blob storage in MVP. Missing paths
-remain visible in UI/doctor output.
+remain visible in UI/doctor output. The optional immutable execution-manifest
+facility also stores metadata and references rather than artifact bytes; it is
+not required by the stable-key process-exit integration path.
 
 ## Review
 
-The trust surface for write-capable agents is evidence review, not automatic
-success. A clean process exit can still leave `outcome = unknown` until an
-operator reviews the run.
+For ordinary operator, plan, and cron writes, the trust surface is evidence
+review rather than automatic success. A clean process exit can leave
+`outcome = unknown` until an operator reviews the run.
+
+For a stable-key integration run using `completion_policy = process_exit`, a
+clean exit means only that Monde executed the process successfully. The
+integration remains responsible for reviewing or validating its domain output,
+and that later decision does not alter the Monde outcome.
