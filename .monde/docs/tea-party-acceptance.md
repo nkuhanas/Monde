@@ -1,44 +1,57 @@
-# TeaParty Progression Acceptance Map
+# TeaParty V1 Monde Acceptance Map
 
-This map records the implemented code and regression evidence for the revised
-Monde delta. Paths are repository-relative.
+This map follows the current TeaParty v1 process-exit contract. Receipt-gated
+completion and Monde execution manifests are optional generic capabilities and
+are not part of this gate.
 
-| # | Acceptance | Implementation | Regression evidence |
+| # | TeaParty v1 acceptance | Monde implementation | Regression evidence |
 |---|---|---|---|
-| 1 | Same-Mon concurrency is bounded and can admit two process runs | `process-slots.ts`, `run-manager.ts`, `MonConfigSchema.max_active_runs` | `tests/run-dispatch.test.ts`; real Codex execution remains part of the adapter release attestation |
-| 2 | Isolated runs have distinct scratch paths and sibling access is denied | `scope.ts`, Codex permission profile, stdio bubblewrap launcher | `tests/run-isolation.test.ts`, `tests/codex-external-mcp.test.ts`, `monde adapter verify-isolation codex` |
-| 3 | Twenty duplicate external starts create one run | transactional `ExternalExecutionRepository.createOrGet` | `tests/external-execution.test.ts` |
-| 4 | Same key with a different request digest conflicts | external execution unique key and digest check | `tests/external-execution.test.ts` |
-| 5 | Lost start response is recovered by external key | lookup endpoint and persistent external ledger | `tests/external-execution.test.ts` |
-| 6 | Codex receives Monde MCP, external MCP, and actor context | Codex adapter MCP composition and immutable context snapshot | `tests/codex-external-mcp.test.ts`, `tests/run-isolation.test.ts` |
-| 7 | External MCP verifies narrow claims without service token | `external_mcp_grants`, introspection endpoint, environment allowlist | `tests/codex-external-mcp.test.ts`, `tests/environment.test.ts` |
-| 8 | Clean exit alone does not report semantic success | external `phase/outcome` projection and completion deadline | `tests/external-execution.test.ts`, `tests/run-auth-and-state.test.ts` |
-| 9 | Completion and manifest registration are idempotent | completion digest ledger and one immutable manifest per execution | `tests/external-execution.test.ts`, `tests/execution-manifest.test.ts` |
-| 10 | Active cancellation reaches acknowledged terminal state | cancellation requested/signalled/acknowledged ledger | `tests/external-execution.test.ts` |
-| 11 | Manifests reject escapes, symlinks, swaps, and conflicting identities | descriptor-based local verification and execution-local output keys | `tests/execution-manifest.test.ts` |
-| 12 | Scratch expiry deletes bytes and retains operational metadata | `run_workspaces` cleanup/retry and manifest availability expiry | `tests/run-isolation.test.ts`, `tests/execution-manifest.test.ts` |
-| 13 | Backups exclude scratch bytes | SQLite-only online backup; run scopes remain external to DB | `tests/backup.test.ts` |
-| 14 | Backup restores and passes checks in an isolated destination | checksum verification and rehearsal CLI | `tests/backup.test.ts` |
-| 15 | Existing Mons retain one-slot/shared behavior and current retention | schema defaults and compatibility parsing | `tests/run-isolation.test.ts`, `.monde/docs/compatibility.md` |
+| 1 | Twenty identical starts produce one run and one process launch | narrow integration-run endpoint plus transactional external ledger | `tests/integration-run.test.ts` |
+| 2 | Clean exit succeeds without a completion callback | `completion_policy = process_exit` | `tests/integration-run.test.ts`, `tests/external-execution.test.ts` |
+| 3 | TeaParty domain validation can fail independently after Monde success | normalized Monde snapshot remains terminal and immutable after process success; QueueItem transition remains TeaParty-owned | Monde side: `tests/integration-run.test.ts`; QueueItem divergence test belongs in TeaParty |
+| 4 | No Monde manifest is required | integration-run completion has no manifest lookup or attachment | `tests/integration-run.test.ts` |
+| 5 | Cancellation persists intent, terminates the process group, and awaits acknowledgement | external cancellation ledger and process-group signalling | `tests/integration-run.test.ts`, `tests/environment.test.ts` |
+| 6 | The actual process-exit path receives isolation, actor context, MCP grants, and credential scrubbing | normal RunManager scope/MCP pipeline shared by integration runs | `tests/integration-run.test.ts`, `tests/codex-external-mcp.test.ts`, `tests/environment.test.ts` |
+| 7 | Stale isolation attestation blocks admission | binary, sandbox-policy, Node, OS/kernel, platform, and architecture fingerprint matching | `tests/run-isolation.test.ts` |
+| 8 | A changed context packet under the same key conflicts | server-computed canonical request digest | `tests/integration-run.test.ts` |
+| 9 | Lost start response is recoverable by execution key | persistent lookup route and ledger | `tests/integration-run.test.ts`, `tests/external-execution.test.ts` |
+| 10 | Existing Mons retain one-slot/shared behavior | schema defaults and workspace invariant | `tests/run-isolation.test.ts`, `.monde/docs/compatibility.md` |
 
-## Corrections To The Original Gate
+## TeaParty-Owned Acceptance
 
-The original redaction requirement is intentionally not claimed. Prompt and
-event payload retention is unchanged and those durable DB rows remain in
-backups. Acceptance 12 covers scratch cleanup; acceptance 13 covers exclusion
-of out-of-database scratch bytes.
+Monde cannot implement or prove this domain transition:
 
-Generic cron and backup rehearsal are independent Monde continuity features.
-They do not gate the semantic correctness of TeaParty execution, and cron does
-not implement TeaParty workflows or retry policy.
+```text
+Monde snapshot = succeeded
+TeaParty output validation = failed
+TeaParty QueueItem = failed
+Monde snapshot remains succeeded
+```
 
-The security claim for isolated Codex execution requires:
+The Monde API makes the states independent and performs no callback into
+TeaParty. The QueueItem transition and its regression belong in the TeaParty
+repository.
+
+## Release Gate
+
+The deterministic suite validates contracts and containment construction. The
+deployed adapter must also pass:
 
 ```bash
 monde adapter verify-isolation codex
 ```
 
-The automated suite checks configuration, snapshots, process slots, and a real
-bubblewrap stdio-child sibling denial when the adapter fingerprint is
-attested. Release/manual acceptance must rerun the attestation after Codex,
-bubblewrap, kernel, OS release, or architecture changes.
+The actual integration-path test runs the contained stdio MCP sibling-denial
+probe when the current attestation is present. Verification must be rerun after
+any fingerprinted binary, sandbox policy, runtime, or host change.
+
+## Optional Capabilities Outside This Gate
+
+The following tests remain valuable Monde coverage but do not represent a
+TeaParty v1 dependency:
+
+- receipt-gated `awaiting_completion`
+- idempotent `/external-executions/:id/complete`
+- immutable Monde execution manifests
+- caller-supplied external attempt lineage
+- manifest availability and local-reference expiry

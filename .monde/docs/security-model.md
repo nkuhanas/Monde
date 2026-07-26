@@ -36,8 +36,8 @@ and isolated runs have different guarantees:
   context snapshot read-only and the current scratch directory writable.
 - Monde advertises isolated Codex support only after a real local verification
   has proved sibling denial for both Codex and an isolated stdio MCP child. The
-  attestation is bound to the Codex and bubblewrap binaries, OS release, and
-  architecture.
+  attestation is bound to the Codex and bubblewrap binaries, Monde sandbox
+  policy, Node version, OS/kernel release, platform, and architecture.
 - **Unsandboxed execution under the Monde service user’s operating-system
   permissions.** This is the `basic-process` model. Its working directory and
   `MONDE_WORK_ROOT` are guidance, not an OS filesystem boundary.
@@ -116,6 +116,11 @@ Scratch directories are outside SQLite and are not copied by the backup
 command. Prompt and event payloads remain durable operational data and are
 included in backups; selective redaction and backup exclusion are not part of
 this local-first progression.
+
+Opaque integration context packets are bounded to 64 KiB, canonicalized for
+hashing and prompt forwarding, and never interpreted by Monde. They are
+durable run content. Integrations must keep credentials and sensitive binary
+payloads out of them.
 
 ## Out Of Scope
 

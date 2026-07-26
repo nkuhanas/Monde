@@ -210,10 +210,11 @@ verified adapter capability. `basic-process` has a different trust boundary:
 it is unsandboxed and runs with the Monde service user's operating-system
 permissions.
 
-Generic external executions add durable idempotency keys, explicit completion
-and cancellation reconciliation, external MCP grants, and immutable output
-manifests without moving workflow, retry, semantic validation, or artifact
-bytes into Monde.
+Generic integration runs add durable idempotency keys, opaque bounded context,
+process-exit outcomes, cancellation reconciliation, and external MCP grants
+without moving workflow, retry, semantic validation, or artifact bytes into
+Monde. Optional receipt-gated completion and immutable output manifests remain
+available for other integrations but are not TeaParty v1 dependencies.
 
 ## Runtime support today
 

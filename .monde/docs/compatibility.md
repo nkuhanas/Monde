@@ -1,6 +1,6 @@
 # Compatibility And Migration
 
-The service database migrates forward to schema version 11 at startup. Startup
+The service database migrates forward to schema version 12 at startup. Startup
 still refuses a database whose schema is newer than the running service.
 
 ## Existing Mon Defaults
@@ -45,6 +45,10 @@ Migrations add:
 Existing run, log, event, plan, and artifact rows are not rewritten into
 TeaParty-specific shapes.
 
+Schema 12 adds `completion_policy` to the generic external-execution ledger.
+Existing rows use `external_receipt`, preserving the previously shipped
+behavior. The narrow integration-run endpoint creates `process_exit` rows.
+
 ## Isolation Compatibility
 
 Shared workspaces remain available. Isolated mode is adapter capability-gated.
@@ -56,6 +60,8 @@ monde adapter verify-isolation codex
 ```
 
 Changing those components invalidates the attestation until it is rerun.
+The fingerprint includes Codex and bubblewrap binary hashes, the Monde sandbox
+policy, Node version, OS/kernel release, platform, and architecture.
 
 ## Backup Compatibility
 

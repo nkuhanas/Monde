@@ -114,6 +114,9 @@ The generated permission profile denies the run-scope parent, grants only the
 current context snapshot read-only and current scratch writable, and grants
 configured read mounts read-only. Codex sandbox behavior is enforced by Codex;
 isolated stdio MCP children receive an independent bubblewrap profile.
+The fingerprint also covers the Monde isolation-policy hash and Node runtime,
+so a policy or relevant runtime change invalidates admission until verification
+is rerun.
 
 ## External MCP Servers
 

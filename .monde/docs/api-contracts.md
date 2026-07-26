@@ -18,6 +18,7 @@ Primary DTOs:
 - `BackupInfoDto`
 - `DoctorStatusDto`
 - `ExternalExecutionDto`
+- `IntegrationRunSnapshotDto`
 - `ExecutionManifestDto`
 - `CronScheduleDto`
 - `CronFireDto`
@@ -41,6 +42,7 @@ GET /runs/:id/events?token=
 GET /external-executions/lookup?integration_id=&external_execution_key=
 GET /external-executions/:id
 GET /external-executions/:id/manifest
+GET /mondes/:mondeId/integrations/:integrationId/runs/:executionKey
 GET /logs?run_id=
 GET /artifacts?monde_id=&run_id=&mon_id=
 GET /artifacts/:id
@@ -75,6 +77,8 @@ POST /runs/:id/abandon
 POST /external-executions
 POST /external-executions/:id/complete
 POST /external-executions/:id/cancel
+POST /mondes/:mondeId/integrations/:integrationId/runs
+POST /mondes/:mondeId/integrations/:integrationId/runs/:executionKey/cancel
 PUT /external-executions/:id/manifest
 PUT /external-executions/:id/manifest/outputs/:logicalName/availability
 POST /mondes/:mondeId/threads
@@ -118,7 +122,18 @@ terminal
 The UI should not infer semantic completion from process exit. Use
 `status`, `process_status`, and `outcome` together for one-shot run state.
 
-Externally managed runs additionally use:
+The narrow integration-run surface exposes:
+
+```text
+status     pending | running | succeeded | failed | cancelled
+```
+
+It uses `completion_policy = process_exit`; a clean acknowledged exit is
+generic execution success and requires no callback or manifest. Its request
+contains one bounded opaque `context_packet`, and the server computes the
+canonical idempotency digest.
+
+The broader optional external-execution surface additionally uses:
 
 ```text
 phase                  queued | starting | active | awaiting_completion |
@@ -129,8 +144,9 @@ cancellation_state     none | requested | signalled | acknowledged |
                        failed | lost
 ```
 
-A clean external process exit is `awaiting_completion`, not success. The
-integration must make an idempotent completion call with an opaque receipt,
+A clean process exit is `awaiting_completion` only for
+`completion_policy = external_receipt`. Integrations that intentionally choose
+that optional policy make an idempotent completion call with an opaque receipt,
 an owned immutable manifest, or both.
 
 For HITL thread cards, prefer user-facing metadata:
@@ -172,5 +188,5 @@ monde backup verify <backup.sqlite>
 monde backup rehearse <backup.sqlite> --destination <new-directory>
 ```
 
-See `tea-party-integration.md` for canonical-digest rules and complete external
-execution examples.
+See `tea-party-integration.md` for the TeaParty v1 start, inspect, cancel, and
+process-exit contract.

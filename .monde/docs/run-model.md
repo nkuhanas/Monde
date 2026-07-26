@@ -136,15 +136,29 @@ occupy slots; their individual adapter turns do.
 
 Queued plan/cron-origin starts should disclose origin before launch.
 
-## External Execution Lifecycle
+## Stable-Key Integration Runs
 
 Generic integrations reserve a durable identity on
 `(integration_id, external_execution_key)`. The same canonical request digest
 returns the existing run; a different digest conflicts. This makes a lost HTTP
 response recoverable without launching duplicate work.
 
-The external projection separates placement, semantic outcome, and
-reconciliation detail:
+The narrow integration-run endpoint accepts one opaque bounded context packet
+and uses process-exit completion:
+
+```text
+clean acknowledged exit  → succeeded
+non-zero/lost/failed      → failed
+acknowledged cancellation → cancelled
+```
+
+No completion callback or Monde manifest is required. This lets an integration
+apply independent domain validation after Monde has succeeded.
+
+## Optional External Completion
+
+The broader external-execution API separates placement, externally asserted
+outcome, and reconciliation detail:
 
 ```text
 phase       queued | starting | active | awaiting_completion |
@@ -153,8 +167,9 @@ outcome     null | succeeded | failed | cancelled
 condition   missing_completion | process_exit_nonzero | process_lost | ...
 ```
 
-A clean process exit enters `awaiting_completion`. Only an idempotent external
-completion receipt and/or an owned manifest can produce semantic success.
+A clean process exit enters `awaiting_completion` only when the integration
+chooses `completion_policy = external_receipt`. Only an idempotent external
+completion receipt and/or an owned manifest can complete that optional mode.
 Global retry attempt numbers and lineage are caller-owned opaque data; Monde
 resolves only a nullable local predecessor.
 
