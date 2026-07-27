@@ -168,7 +168,7 @@ chat entry points, and management actions in one place.
 ### Runs and review
 
 <p align="center">
-  <img src="./docs/assets/runs_overview_hero.png" alt="Monde runs and review" width="920" />
+  <img src="./docs/assets/runs_overview_evidence.png" alt="Monde runs and review" width="920" />
 </p>
 
 The Runs and Review surfaces expose logical-run state, process attempts,

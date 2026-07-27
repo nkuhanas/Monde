@@ -8,7 +8,7 @@ docs/assets/overview_dashboard_hero.png
 docs/assets/chat_demo.gif
 docs/assets/chat_rail.png
 docs/assets/mons_overview.png
-docs/assets/runs_overview_hero.png
+docs/assets/runs_overview_evidence.png
 ```
 
 Current roles:
@@ -18,14 +18,14 @@ Current roles:
 - `chat_demo.gif`: mon thread interaction demo.
 - `chat_rail.png`: persistent chat rail and thread widget detail.
 - `mons_overview.png`: Mons tab, actor metadata, permissions, and actions.
-- `runs_overview_hero.png`: Runs and Review surface with terminal evidence.
+- `runs_overview_evidence.png`: Runs and Review surface with readable evidence.
 
 Current dimensions:
 
 ```text
 monde_lockup_v1.png          2190 x 749
 overview_dashboard_hero.png  2385 x 1267
-runs_overview_hero.png       2377 x 1346
+runs_overview_evidence.png   1992 x 1269
 mons_overview.png            1158 x 594
 chat_rail.png                676 x 662
 chat_demo.gif                800 x 1356
