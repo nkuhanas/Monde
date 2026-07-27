@@ -97,11 +97,13 @@ random grant. The database stores only its hash. Introspection returns the
 run ID, Mon and Monde IDs, integration and external execution keys, opaque
 external scope, audience, and expiry.
 
-Grants are accepted only while their run is starting or active and are revoked
-when the process ends. Authenticated streamable-HTTP MCP is constrained to
-loopback in v1. An isolated stdio MCP process runs under its own bubblewrap
-profile and sees only its declared read mounts, actor-context access, and
-scratch access.
+Grants are accepted only while their run is starting or active. They use a
+short expiry that introspection renews while that active-state check continues
+to pass. A new process attempt receives new grants; prior-attempt grants are
+revoked before retry backoff, and all grants are revoked when the logical run
+terminates. Authenticated streamable-HTTP MCP is constrained to loopback in
+v1. An isolated stdio MCP process runs under its own bubblewrap profile and
+sees only its declared read mounts, actor-context access, and scratch access.
 
 ## Backups
 

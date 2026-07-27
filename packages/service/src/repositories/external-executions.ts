@@ -31,6 +31,8 @@ export interface ExternalExecutionRecord {
   process_exit_code: number | null;
   process_exit_signal: string | null;
   process_exited_at: string | null;
+  process_attempt: number;
+  retry_not_before: string | null;
   completion_digest: string | null;
   completion_receipt?: unknown;
   completion_manifest_id: string | null;
@@ -76,76 +78,105 @@ export class ExternalExecutionRepository {
   }): { execution: ExternalExecutionRecord; created: boolean } {
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      const existing = this.getByKey(input.integrationId, input.externalExecutionKey);
-      if (existing) {
-        if (existing.request_digest !== input.requestDigest) {
-          throw new ExternalExecutionConflictError(
-            `External execution key ${input.integrationId}/${input.externalExecutionKey} already has a different digest.`,
-            "digest_conflict"
-          );
-        }
-        if (
-          input.completionPolicy !== undefined &&
-          existing.completion_policy !== input.completionPolicy
-        ) {
-          throw new ExternalExecutionConflictError(
-            `External execution key ${input.integrationId}/${input.externalExecutionKey} already uses completion policy ${existing.completion_policy}.`,
-            "digest_conflict"
-          );
-        }
-        this.db.exec("COMMIT");
-        return { execution: existing, created: false };
-      }
-
-      const predecessor =
-        input.predecessorExternalKey
-          ? this.getByKey(input.predecessorIntegrationId ?? input.integrationId, input.predecessorExternalKey)
-          : undefined;
-      const now = input.now ?? new Date().toISOString();
-      const id = `ext_${nanoid(14)}`;
-      this.runs.insert(input.run);
-      this.db
-        .prepare(
-          `INSERT INTO external_executions (
-             id, integration_id, external_execution_key, request_digest, run_id, monde_id, mon_id,
-             completion_policy,
-             external_scope_json, external_context_json, artifact_sink_ref_json, external_lineage_json,
-             predecessor_integration_id, predecessor_external_key, local_predecessor_run_id,
-             phase, outcome, condition, cancellation_state, created_at, updated_at
-           ) VALUES (
-             @id, @integration_id, @external_execution_key, @request_digest, @run_id, @monde_id, @mon_id,
-             @completion_policy,
-             @external_scope_json, @external_context_json, @artifact_sink_ref_json, @external_lineage_json,
-             @predecessor_integration_id, @predecessor_external_key, @local_predecessor_run_id,
-             'queued', NULL, NULL, 'none', @created_at, @updated_at
-           )`
-        )
-        .run({
-          id,
-          integration_id: input.integrationId,
-          external_execution_key: input.externalExecutionKey,
-          request_digest: input.requestDigest,
-          run_id: input.run.id,
-          monde_id: input.run.monde_id,
-          mon_id: input.run.mon_id,
-          completion_policy: input.completionPolicy ?? "external_receipt",
-          external_scope_json: JSON.stringify(input.externalScope),
-          external_context_json: JSON.stringify(input.externalContext),
-          artifact_sink_ref_json: input.artifactSinkRef === undefined ? null : JSON.stringify(input.artifactSinkRef),
-          external_lineage_json: input.externalLineage === undefined ? null : JSON.stringify(input.externalLineage),
-          predecessor_integration_id: input.predecessorIntegrationId ?? (input.predecessorExternalKey ? input.integrationId : null),
-          predecessor_external_key: input.predecessorExternalKey ?? null,
-          local_predecessor_run_id: predecessor?.run_id ?? null,
-          created_at: now,
-          updated_at: now
-        });
-      const execution = this.get(id)!;
+      const result = this.createOrGetInTransaction(input);
       this.db.exec("COMMIT");
-      return { execution, created: true };
+      return result;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  createOrGetInTransaction(input: {
+    integrationId: string;
+    externalExecutionKey: string;
+    requestDigest: string;
+    run: RunRecord;
+    externalScope: unknown;
+    externalContext: unknown;
+    completionPolicy?: ExternalExecutionCompletionPolicy;
+    artifactSinkRef?: unknown;
+    externalLineage?: unknown;
+    predecessorIntegrationId?: string;
+    predecessorExternalKey?: string;
+    now?: string;
+  }): { execution: ExternalExecutionRecord; created: boolean } {
+    const existing = this.getByKey(
+      input.integrationId,
+      input.externalExecutionKey
+    );
+    if (existing) {
+      if (existing.request_digest !== input.requestDigest) {
+        throw new ExternalExecutionConflictError(
+          `External execution key ${input.integrationId}/${input.externalExecutionKey} already has a different digest.`,
+          "digest_conflict"
+        );
+      }
+      if (
+        input.completionPolicy !== undefined &&
+        existing.completion_policy !== input.completionPolicy
+      ) {
+        throw new ExternalExecutionConflictError(
+          `External execution key ${input.integrationId}/${input.externalExecutionKey} already uses completion policy ${existing.completion_policy}.`,
+          "digest_conflict"
+        );
+      }
+      return { execution: existing, created: false };
+    }
+
+    const predecessor = input.predecessorExternalKey
+      ? this.getByKey(
+          input.predecessorIntegrationId ?? input.integrationId,
+          input.predecessorExternalKey
+        )
+      : undefined;
+    const now = input.now ?? new Date().toISOString();
+    const id = `ext_${nanoid(14)}`;
+    this.runs.insert(input.run);
+    this.db
+      .prepare(
+        `INSERT INTO external_executions (
+           id, integration_id, external_execution_key, request_digest, run_id, monde_id, mon_id,
+           completion_policy,
+           external_scope_json, external_context_json, artifact_sink_ref_json, external_lineage_json,
+           predecessor_integration_id, predecessor_external_key, local_predecessor_run_id,
+           phase, outcome, condition, cancellation_state, created_at, updated_at
+         ) VALUES (
+           @id, @integration_id, @external_execution_key, @request_digest, @run_id, @monde_id, @mon_id,
+           @completion_policy,
+           @external_scope_json, @external_context_json, @artifact_sink_ref_json, @external_lineage_json,
+           @predecessor_integration_id, @predecessor_external_key, @local_predecessor_run_id,
+           'queued', NULL, NULL, 'none', @created_at, @updated_at
+         )`
+      )
+      .run({
+        id,
+        integration_id: input.integrationId,
+        external_execution_key: input.externalExecutionKey,
+        request_digest: input.requestDigest,
+        run_id: input.run.id,
+        monde_id: input.run.monde_id,
+        mon_id: input.run.mon_id,
+        completion_policy: input.completionPolicy ?? "external_receipt",
+        external_scope_json: JSON.stringify(input.externalScope),
+        external_context_json: JSON.stringify(input.externalContext),
+        artifact_sink_ref_json:
+          input.artifactSinkRef === undefined
+            ? null
+            : JSON.stringify(input.artifactSinkRef),
+        external_lineage_json:
+          input.externalLineage === undefined
+            ? null
+            : JSON.stringify(input.externalLineage),
+        predecessor_integration_id:
+          input.predecessorIntegrationId ??
+          (input.predecessorExternalKey ? input.integrationId : null),
+        predecessor_external_key: input.predecessorExternalKey ?? null,
+        local_predecessor_run_id: predecessor?.run_id ?? null,
+        created_at: now,
+        updated_at: now
+      });
+    return { execution: this.get(id)!, created: true };
   }
 
   get(id: string): ExternalExecutionRecord | undefined {
@@ -171,11 +202,66 @@ export class ExternalExecutionRepository {
     this.db
       .prepare(
         `UPDATE external_executions
-         SET phase = @phase, updated_at = @updated_at
+         SET phase = @phase,
+             retry_not_before = NULL,
+             updated_at = @updated_at
          WHERE id = @id AND phase != 'terminal'`
       )
       .run({ id, phase, updated_at: new Date().toISOString() });
     return this.get(id)!;
+  }
+
+  markAttemptStartingByRun(
+    runId: string,
+    attemptNumber: number,
+    now = new Date().toISOString()
+  ): ExternalExecutionRecord | undefined {
+    this.db
+      .prepare(
+        `UPDATE external_executions
+         SET phase = 'starting',
+             outcome = NULL,
+             condition = NULL,
+             process_attempt = @process_attempt,
+             retry_not_before = NULL,
+             updated_at = @updated_at
+         WHERE run_id = @run_id AND phase != 'terminal'`
+      )
+      .run({
+        run_id: runId,
+        process_attempt: attemptNumber,
+        updated_at: now
+      });
+    return this.getByRunId(runId);
+  }
+
+  scheduleRetryByRun(
+    runId: string,
+    attemptNumber: number,
+    condition: string,
+    retryNotBefore: string,
+    now = new Date().toISOString()
+  ): ExternalExecutionRecord | undefined {
+    this.db
+      .prepare(
+        `UPDATE external_executions
+         SET phase = 'queued',
+             outcome = NULL,
+             condition = @condition,
+             process_attempt = @process_attempt,
+             retry_not_before = @retry_not_before,
+             updated_at = @updated_at
+         WHERE run_id = @run_id AND phase != 'terminal'
+           AND cancellation_state = 'none'`
+      )
+      .run({
+        run_id: runId,
+        process_attempt: attemptNumber,
+        condition,
+        retry_not_before: retryNotBefore,
+        updated_at: now
+      });
+    return this.getByRunId(runId);
   }
 
   recordProcessExit(
@@ -229,6 +315,7 @@ export class ExternalExecutionRepository {
                process_exit_signal = @process_exit_signal,
                process_exited_at = @process_exited_at,
                completion_deadline_at = @completion_deadline_at,
+               retry_not_before = NULL,
                cancellation_state = @cancellation_state,
                cancellation_acknowledged_at = @cancellation_acknowledged_at,
                updated_at = @updated_at
@@ -334,6 +421,7 @@ export class ExternalExecutionRepository {
                cancellation_state = @cancellation_state,
                cancellation_requested_at = COALESCE(cancellation_requested_at, @requested_at),
                cancellation_acknowledged_at = @acknowledged_at,
+               retry_not_before = NULL,
                updated_at = @updated_at
            WHERE id = @id`
         )
@@ -381,6 +469,7 @@ export class ExternalExecutionRepository {
              outcome = 'failed',
              condition = @condition,
              cancellation_state = @cancellation_state,
+             retry_not_before = NULL,
              updated_at = @updated_at
          WHERE run_id = @run_id`
       )
@@ -410,6 +499,7 @@ export class ExternalExecutionRepository {
              outcome = 'failed',
              condition = @condition,
              cancellation_state = @cancellation_state,
+             retry_not_before = NULL,
              updated_at = @updated_at
          WHERE run_id = @run_id`
       )
@@ -491,6 +581,8 @@ interface ExternalExecutionRow {
   process_exit_code: number | null;
   process_exit_signal: string | null;
   process_exited_at: string | null;
+  process_attempt: number;
+  retry_not_before: string | null;
   completion_digest: string | null;
   completion_receipt_json: string | null;
   completion_manifest_id: string | null;
@@ -527,6 +619,8 @@ function fromRow(row: ExternalExecutionRow): ExternalExecutionRecord {
     process_exit_code: row.process_exit_code,
     process_exit_signal: row.process_exit_signal,
     process_exited_at: row.process_exited_at,
+    process_attempt: row.process_attempt,
+    retry_not_before: row.retry_not_before,
     completion_digest: row.completion_digest,
     completion_receipt: row.completion_receipt_json ? JSON.parse(row.completion_receipt_json) : undefined,
     completion_manifest_id: row.completion_manifest_id,

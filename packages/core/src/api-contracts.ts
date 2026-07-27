@@ -1,6 +1,6 @@
 import type { RunOutcome, RunStatus } from "./run-state.js";
 import type { RunCloseReason, RunInteractionMode, RunOutcomeState, RunRuntimeState } from "./run-state.js";
-import type { MonConfig, RunOrigin, RunRecord } from "./schemas.js";
+import type { MonConfig, RetryCondition, RunOrigin, RunRecord, RunRetryPolicy } from "./schemas.js";
 
 export type RunnerType = "basic-process" | "codex" | "opencode" | "pty" | "adapter-native";
 export type InteractionMode = "interactive" | "single-shot";
@@ -44,6 +44,7 @@ export interface MonDto {
   harness_defaults?: Record<string, { sandbox_mode?: string }>;
   allow_external_work_root?: boolean;
   max_active_runs?: number;
+  retry_policy?: RunRetryPolicy;
   run_workspace?: { mode: "shared" } | { mode: "isolated"; recovery_window_seconds: number };
   actor_context?: Array<{ root: "mon" | "work"; path: string }>;
   read_mounts?: Array<{ root: "mon" | "work"; path: string }>;
@@ -307,6 +308,8 @@ export interface ExternalExecutionDto {
   external_lineage?: unknown;
   local_predecessor_run_id: string | null;
   process_exited_at: string | null;
+  process_attempt: number;
+  retry_not_before: string | null;
   completion_received_at: string | null;
   completion_deadline_at: string | null;
   cancellation_requested_at: string | null;
@@ -322,6 +325,29 @@ export interface IntegrationRunSnapshotDto {
   started_at?: string;
   finished_at?: string;
   failure_code?: string;
+  process_attempt?: number;
+  retry_condition?: string;
+  next_attempt_at?: string;
+}
+
+export type RunAttemptStatus = "starting" | "active" | "succeeded" | "failed" | "cancelled" | "lost";
+
+export interface RunAttemptDto {
+  id: string;
+  run_id: string;
+  attempt_number: number;
+  status: RunAttemptStatus;
+  condition: RetryCondition | string | null;
+  pid: number | null;
+  exit_code: number | null;
+  exit_signal: string | null;
+  error: string | null;
+  retry_at: string | null;
+  started_at: string;
+  spawned_at: string | null;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export type ExecutionManifestAvailability = "available" | "deleted" | "expired";
@@ -369,6 +395,10 @@ export interface CronScheduleDto {
   prompt: string;
   harness_override: string | null;
   sandbox_mode: string | null;
+  integration_id: string | null;
+  external_schedule_key: string | null;
+  request_digest: string | null;
+  context_packet?: unknown;
   enabled: boolean;
   next_fire_at: string | null;
   pending_first_fire_at: string | null;
@@ -387,4 +417,5 @@ export interface CronFireDto {
   coalesced_from_fire_time: string | null;
   fired_at: string;
   run_id: string;
+  external_execution_key: string | null;
 }

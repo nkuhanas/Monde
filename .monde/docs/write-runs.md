@@ -41,6 +41,21 @@ Changed files are registered as file artifacts when manageable.
 
 Missing git context adds `no_git_diff_available` instead of inventing evidence.
 
+## Retry Safety
+
+Generic process retry preserves the run's workspace. An isolated run reuses
+its run-scoped scratch directory; a shared run reuses the same Mon work root.
+This permits recovery or continuation, but it also means a failed attempt's
+partial writes remain visible to the next attempt.
+
+Do not enable automatic retry for write-capable work unless the operation is
+idempotent, explicitly resumable, or can safely recognize its prior partial
+effects. A non-zero exit, timeout, credential failure, or lost connection does
+not prove that no write or external tool call occurred.
+
+Existing Mons default to `max_attempts: 1`, preserving operator-reviewed
+single-attempt write behavior.
+
 ## Artifacts
 
 Artifacts are path references. The service reports:
@@ -61,6 +76,10 @@ not required by the stable-key process-exit integration path.
 For ordinary operator, plan, and cron writes, the trust surface is evidence
 review rather than automatic success. A clean process exit can leave
 `outcome = unknown` until an operator reviews the run.
+
+When retry is enabled, diff evidence is finalized only when the logical run
+becomes terminal. The process-attempt ledger records the failed and successful
+launches separately.
 
 For a stable-key integration run using `completion_policy = process_exit`, a
 clean exit means only that Monde executed the process successfully. The

@@ -28,6 +28,9 @@ type MondeRunSnapshot = {
   startedAt?: string;
   finishedAt?: string;
   failureCode?: string;
+  processAttempt?: number;
+  retryCondition?: string;
+  nextAttemptAt?: string;
 };
 ```
 
@@ -120,6 +123,9 @@ started as process-group leaders; Monde signals the whole group and reports
 `cancelled` only after process-exit acknowledgement. Restart reconciliation
 reports lost cancellation as a failed run with a precise condition.
 
+A cancellation received while the run is waiting for Monde retry backoff
+clears the pending retry wake and cancels the same logical execution.
+
 ## V1 Outcome Contract
 
 The narrow integration-run endpoint always uses
@@ -142,6 +148,32 @@ runtime output after Monde reports success. A TeaParty QueueItem may therefore
 be failed while the Monde snapshot remains `succeeded`; TeaParty owns and
 displays that independent domain outcome.
 
+## Monde Retry Contract
+
+Monde may retry a generically failed process attempt when the selected Mon's
+`retry_policy` permits it. This never changes the TeaParty execution key or
+creates a new TeaParty QueueItem attempt:
+
+```text
+same TeaParty executionKey
+same Monde runId
+same opaque context packet
+new Monde processAttempt
+```
+
+During backoff the TeaParty snapshot is `pending`, with optional
+`retryCondition` and `nextAttemptAt`. Success on a later process attempt makes
+the Monde snapshot `succeeded`. Exhaustion makes it `failed`.
+
+TeaParty must still verify that the successful Mon run's claimed effects and
+outputs materialized. That domain check can fail the QueueItem without
+rewriting Monde's operational success. TeaParty should not issue a new Monde
+execution key merely because Monde is between its own process attempts.
+
+Monde does not automatically retry a process that was merely found active
+after a service restart. It marks that run lost/failed because relaunching
+after uncertain execution could duplicate effects.
+
 ## Mon Configuration
 
 A concurrent isolated Codex Mon can use:
@@ -153,9 +185,26 @@ A concurrent isolated Codex Mon can use:
     "mode": "isolated",
     "recovery_window_seconds": 86400
   },
+  "retry_policy": {
+    "max_attempts": 3,
+    "initial_backoff_seconds": 5,
+    "backoff_multiplier": 2,
+    "max_backoff_seconds": 60,
+    "attempt_timeout_seconds": 1800,
+    "kill_grace_seconds": 5,
+    "retryable_conditions": [
+      "launch_error",
+      "process_exit_nonzero",
+      "process_interrupted",
+      "required_mcp_unavailable",
+      "attempt_timeout",
+      "credential_expired"
+    ]
+  },
   "actor_context": [
     { "root": "mon", "path": "SOUL.md" },
-    { "root": "mon", "path": "doctrine" }
+    { "root": "mon", "path": "doctrine/identity.md" },
+    { "root": "mon", "path": "doctrine/operations.md" }
   ],
   "external_mcp_servers": [
     {
@@ -183,6 +232,10 @@ Authenticated streamable-HTTP MCP is loopback-only in v1. An isolated stdio
 MCP child receives its own bubblewrap profile and only explicitly declared
 context, scratch, working-directory, and read-mount access.
 
+Retry is opt-in. Existing Mons default to `max_attempts: 1`. `harness_noop`
+can be placed in `retryable_conditions`, but is excluded by default because a
+quiet harness may have performed useful external work.
+
 Isolated Codex admission requires:
 
 ```bash
@@ -204,21 +257,71 @@ Authorization: Bearer <server-specific-run-grant>
 ```
 
 Claims include the generic run, Mon, Monde, integration, execution key,
-audience, expiry, and an opaque external scope. For the narrow integration-run
-endpoint, external scope is `null`; the TeaParty MCP server resolves its domain
-authorization from TeaParty's persisted execution record and context-packet
-contract. A Monde run claim is not TeaParty domain authorization.
+audience, expiry, and an opaque external scope. For a direct narrow
+integration-run start, external scope is `null`; the TeaParty MCP server
+resolves its domain authorization from TeaParty's persisted execution record
+and context-packet contract. An integration-owned scheduled fire carries its
+opaque packet as external scope so the MCP server can resolve that activation.
+A Monde run claim is not TeaParty domain authorization.
+
+Each process attempt receives new grants. Introspection renews an unrevoked
+grant's short expiry while its run is actually `starting` or `active`; terminal
+or backoff-queued runs cannot introspect, and prior-attempt grants remain
+revoked.
 
 ## Operational Evidence
 
 Inspection returns the durable Monde run record alongside the normalized
-snapshot. It includes process lifecycle, exit or failure condition, adapter
-information, scope snapshot, context-packet digest, MCP attachment evidence,
-timestamps, logs, and events.
+snapshot, including lifecycle, exit or failure condition, adapter information,
+scope snapshot, context-packet digest, MCP attachment evidence, and timestamps.
+Ordered process attempts, logs, and events are separate Monde evidence
+endpoints; they are not embedded into the stable-key inspection response.
 
 Monde scratch is generic harness-local state. TeaParty owns runtime containers,
 ephemeral intelligence, staged artifacts, output manifests, provenance,
 retention, and Asset admission.
+
+## Scheduled Integration Runs
+
+TeaParty can register generic scheduled activation without exposing CronJob or
+QueueItem schemas:
+
+```http
+POST /mondes/:mondeId/integrations/:integrationId/schedules
+Authorization: Bearer <local-service-token>
+Content-Type: application/json
+
+{
+  "schedule_key": "seia-refresh",
+  "mon_id": "seia",
+  "name": "Seia refresh",
+  "expression": "0 * * * *",
+  "timezone": "America/Los_Angeles",
+  "title": "Run the scheduled refresh",
+  "context_packet": {
+    "schema": {
+      "id": "teaparty.run-context",
+      "version": "1"
+    },
+    "scope": {
+      "kind": "system"
+    },
+    "objective": "Perform the scheduled refresh."
+  }
+}
+```
+
+An identical registration replays the same schedule; a changed payload under
+the same schedule key conflicts. A fire uses a deterministic external
+execution key equivalent to:
+
+```text
+<scheduleKey>:<scheduledFireTime>
+```
+
+The fired run uses the same process-exit, inspect, cancel, isolation, MCP, and
+generic retry behavior as a direct integration run. Cron coalesces missed
+fires and does not create a TeaParty workflow, lease, or machine route.
 
 ## Optional Generic Monde Capabilities
 

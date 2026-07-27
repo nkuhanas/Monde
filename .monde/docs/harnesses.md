@@ -42,6 +42,10 @@ injected into harnesses. A one-shot token expires when its process finishes. A
 HITL token is valid only during its current adapter turn and expires when that
 turn ends or times out.
 
+When a logical one-shot run retries, each process attempt receives a new run
+token and new external MCP grants. Tokens and grants from the failed attempt
+are revoked during backoff.
+
 ## Basic Process
 
 `basic-process` is the reliable fallback harness for local smoke tests. It
@@ -68,6 +72,44 @@ external cancellation, and HITL timeout signaling target that group so a shell,
 Codex process, or MCP child does not survive merely because it is a descendant
 of the direct child. Platforms without POSIX process groups fall back to
 signaling the direct child.
+
+## One-Shot Attempts And Retry
+
+The selected Mon may opt one-shot processes into generic retry:
+
+```json
+{
+  "retry_policy": {
+    "max_attempts": 3,
+    "initial_backoff_seconds": 5,
+    "backoff_multiplier": 2,
+    "max_backoff_seconds": 60,
+    "attempt_timeout_seconds": 1800,
+    "kill_grace_seconds": 5,
+    "retryable_conditions": [
+      "launch_error",
+      "process_exit_nonzero",
+      "process_interrupted",
+      "required_mcp_unavailable",
+      "attempt_timeout",
+      "credential_expired"
+    ]
+  }
+}
+```
+
+Existing Mons default to one attempt. `harness_noop` is available but omitted
+from the default condition list because no stdout/stderr is not proof that a
+process did nothing.
+
+Retry preserves the logical run, scope snapshot, and workspace while replacing
+the process and attempt-scoped credentials. This is safe only when repeating
+the harness operation is operationally idempotent or can resume safely from
+the preserved workspace. A failed process may have performed partial
+filesystem or external side effects before Monde observed the failure.
+
+Monde never retries a process merely found active after service restart because
+its completion and side effects are uncertain.
 
 ## Codex
 
@@ -140,6 +182,11 @@ and read mounts. They cannot inherit Codex's full filesystem view.
 HITL chat turns should distinguish idle or dead harnesses from long-running but
 active work. See `harness-liveness.md` for the watchdog model, activity
 signals, timeout metadata, and acceptance criteria.
+
+One-shot attempts use the separate optional
+`retry_policy.attempt_timeout_seconds`. That timeout terminates the process
+group and becomes the retry condition `attempt_timeout`; it does not use HITL
+idle-activity tracking.
 
 ## opencode
 

@@ -167,7 +167,7 @@ Read the token from the reported token path and paste it into the UI.
 | Runs | Process lifecycle, terminal output, queue state, and review entry points |
 | Review | Logs, artifacts, runtime scope, write evidence, result notes, and semantic outcome |
 | Plans | Coordination contracts that generate queued runs from assignments |
-| Cron | Generic timezone-aware schedules that enqueue ordinary Mon runs |
+| Cron | Generic timezone-aware schedules for ordinary or stable-key integration runs |
 | Artifacts | Path-referenced evidence with bounded previews and path status |
 | Status | Service health, adapter detection, backup state, doctor findings, and DB metadata |
 
@@ -203,6 +203,15 @@ Each Mon defaults to one process slot and a shared work root. Opt-in concurrent
 Mons use atomic process slots and isolated run scopes with unique scratch
 workspaces, immutable actor context, and explicit read mounts.
 
+Each Mon also defaults to one process attempt per logical run. Opt-in generic
+retry keeps the same run and stable execution key while recording durable
+attempts, persisted backoff, timeouts, and cancellation. The operator review
+surface shows attempt history and scheduled retry state.
+
+Retry does not prove that a failed attempt had no side effects. Enable multiple
+attempts only for harness work that is idempotent or explicitly resumable,
+especially when the process can write files or call external tools.
+
 Codex write-capable runs are explicit. Codex defaults to read-only unless a
 write sandbox is requested, and write runs capture metadata and diff evidence
 when Git context is available. Isolated Codex support requires a locally
@@ -212,9 +221,11 @@ permissions.
 
 Generic integration runs add durable idempotency keys, opaque bounded context,
 process-exit outcomes, cancellation reconciliation, and external MCP grants
-without moving workflow, retry, semantic validation, or artifact bytes into
-Monde. Optional receipt-gated completion and immutable output manifests remain
-available for other integrations but are not TeaParty v1 dependencies.
+without moving workflow, caller-domain retry, semantic validation, or artifact
+bytes into Monde. Monde can apply its own generic process-attempt retry policy
+inside that stable logical run. Optional receipt-gated completion and immutable
+output manifests remain available for other integrations but are not TeaParty
+v1 dependencies.
 
 ## Runtime support today
 
@@ -260,6 +271,7 @@ Monde is MVP local operator runtime software. The current focus is:
 - hardening HITL chat and run review flows
 - improving write evidence and artifact review
 - hardening stable-key integration runs and the optional external-receipt substrate
+- making process-attempt retry and scheduled integration evidence operator-legible
 - expanding harness support without weakening scoped permissions
 - keeping setup and recovery clear for local-first use
 

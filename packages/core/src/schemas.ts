@@ -71,6 +71,57 @@ export const RunWorkspacePolicySchema = z.discriminatedUnion("mode", [
   })
 ]);
 
+export const RetryConditionSchema = z.enum([
+  "launch_error",
+  "process_exit_nonzero",
+  "process_interrupted",
+  "required_mcp_unavailable",
+  "attempt_timeout",
+  "credential_expired",
+  "harness_noop"
+]);
+
+export const RunRetryPolicySchema = z
+  .object({
+    max_attempts: z.number().int().min(1).max(10).default(1),
+    initial_backoff_seconds: z.number().int().min(0).max(3600).default(5),
+    backoff_multiplier: z.number().min(1).max(10).default(2),
+    max_backoff_seconds: z.number().int().min(0).max(86400).default(300),
+    attempt_timeout_seconds: z.number().int().positive().max(86400).optional(),
+    kill_grace_seconds: z.number().int().positive().max(300).default(5),
+    retryable_conditions: z
+      .array(RetryConditionSchema)
+      .max(RetryConditionSchema.options.length)
+      .default([
+        "launch_error",
+        "process_exit_nonzero",
+        "process_interrupted",
+        "required_mcp_unavailable",
+        "attempt_timeout",
+        "credential_expired"
+      ])
+  })
+  .superRefine((policy, context) => {
+    if (policy.max_backoff_seconds < policy.initial_backoff_seconds) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["max_backoff_seconds"],
+        message: "max_backoff_seconds must be greater than or equal to initial_backoff_seconds"
+      });
+    }
+    const conditions = new Set<string>();
+    for (const [index, condition] of policy.retryable_conditions.entries()) {
+      if (conditions.has(condition)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["retryable_conditions", index],
+          message: `Duplicate retry condition: ${condition}`
+        });
+      }
+      conditions.add(condition);
+    }
+  });
+
 export const MonConfigSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -88,6 +139,21 @@ export const MonConfigSchema = z.object({
   work_root: z.string().default(".."),
   allow_external_work_root: z.boolean().optional(),
   max_active_runs: z.number().int().min(1).max(32).default(1),
+  retry_policy: RunRetryPolicySchema.default({
+    max_attempts: 1,
+    initial_backoff_seconds: 5,
+    backoff_multiplier: 2,
+    max_backoff_seconds: 300,
+    kill_grace_seconds: 5,
+    retryable_conditions: [
+      "launch_error",
+      "process_exit_nonzero",
+      "process_interrupted",
+      "required_mcp_unavailable",
+      "attempt_timeout",
+      "credential_expired"
+    ]
+  }),
   run_workspace: RunWorkspacePolicySchema.default({ mode: "shared" }),
   actor_context: z.array(ActorContextEntrySchema).max(32).default([]),
   read_mounts: z.array(ReadMountSchema).max(16).default([]),
@@ -138,6 +204,8 @@ export const MonConfigSchema = z.object({
 });
 
 export type MonConfig = z.infer<typeof MonConfigSchema>;
+export type RetryCondition = z.infer<typeof RetryConditionSchema>;
+export type RunRetryPolicy = z.infer<typeof RunRetryPolicySchema>;
 
 export const RunStatusSchema = z.enum(runStatuses);
 export const ProcessStatusSchema = z.enum(processStatuses);

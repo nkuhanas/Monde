@@ -42,12 +42,20 @@ Web Run Review shows:
 - origin
 - intent
 - lifecycle/process/outcome
+- ordered process attempts and retry conditions
+- scheduled retry time while a logical run is in backoff
 - harness mode
 - write/sandbox metadata
 - logs
 - artifacts
 - warnings
 - result review data
+
+Retry backoff is not an operator outcome gate. The logical run remains
+`queued/pending`, exposes no manual Start action that can bypass the persisted
+backoff, and becomes reviewable only after its terminal ordinary-run outcome.
+Earlier failed attempts remain operational evidence even if a later attempt
+succeeds.
 
 ## HITL Thread Closure
 

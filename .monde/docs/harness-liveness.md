@@ -9,7 +9,8 @@ the work succeeded.
 
 The web chat surface distinguishes idle and hard timeout failures and includes
 the last recorded activity timestamp in the rendered error. One-shot run
-behavior is unchanged.
+timeouts use a separate process-attempt policy and do not use this HITL
+activity model.
 
 ## Problem Addressed
 
@@ -46,6 +47,17 @@ MONDE_HITL_KILL_GRACE_MS = 5000
 
 `MONDE_HITL_TURN_TIMEOUT_MS` remains a backward-compatible fallback for
 `MONDE_HITL_HARD_TIMEOUT_MS`.
+
+One-shot Mons may separately configure:
+
+```text
+retry_policy.attempt_timeout_seconds
+retry_policy.kill_grace_seconds
+```
+
+That deadline does not reset on activity. It records `attempt_timeout`,
+signals the process group, and either schedules another process attempt or
+terminally fails the logical run according to the Mon retry policy.
 
 ## Activity Signals
 

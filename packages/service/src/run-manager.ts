@@ -10,7 +10,9 @@ import {
   finishRunStopped,
   markRunActive,
   startRunLifecycle,
-  type RunRecord
+  type RetryCondition,
+  type RunRecord,
+  type RunRetryPolicy
 } from "@monde/core";
 import {
   getHarnessAdapter,
@@ -41,6 +43,7 @@ import type { ExternalExecutionRepository } from "./repositories/external-execut
 import type { ExternalMcpGrantRepository } from "./repositories/external-mcp-grants.js";
 import type { ExecutionManifestRepository } from "./repositories/execution-manifests.js";
 import type { LogRepository } from "./repositories/logs.js";
+import type { RunAttemptRepository } from "./repositories/run-attempts.js";
 
 export interface RunManagerConfig {
   serviceAddr: string;
@@ -75,8 +78,16 @@ export interface HitlThreadResponseResult {
 
 interface RunningRun {
   process: RunningProcess;
+  attemptNumber: number;
+  activity: {
+    observed: boolean;
+    stderrTail: string;
+  };
   stopRequested: boolean;
+  timedOut: boolean;
   stalePoll?: NodeJS.Timeout;
+  attemptTimeout?: RunManagerTimer;
+  killTimer?: RunManagerTimer;
 }
 
 type HitlTimeoutReason = "idle_timeout" | "hard_timeout";
@@ -106,6 +117,7 @@ const systemRunManagerClock: RunManagerClock = {
 export class RunManager {
   private readonly running = new Map<string, RunningRun>();
   private readonly hitlActivities = new Map<string, HitlActivityState>();
+  private readonly retryTimers = new Map<string, RunManagerTimer>();
   private readonly runner: HarnessRunner;
   private readonly clock: RunManagerClock;
 
@@ -118,6 +130,7 @@ export class RunManager {
       mons: MonRepository;
       plans?: PlanRepository;
       processSlots?: ProcessSlotRepository;
+      runAttempts?: RunAttemptRepository;
       runs: RunRepository;
       runWorkspaces?: RunWorkspaceRepository;
       logs: LogRepository;
@@ -142,13 +155,22 @@ export class RunManager {
       throw new Error(`Run ${run.id} cannot be started from status ${run.status}.`);
     }
 
+    const retryAt = this.deps.runs.nextRetryAt(run.id);
+    if (retryAt && Date.parse(retryAt) > this.clock.now()) {
+      return { run, started: false };
+    }
+
     const monde = this.deps.mondes.get(run.monde_id);
     const mon = this.deps.mons.get(run.monde_id, run.mon_id);
     if (!monde || !mon) {
       throw new Error(`Cannot resolve mon ${run.mon_id} in Monde ${run.monde_id}.`);
     }
 
-    const baseScope = resolveRunScope(monde, mon);
+    const previousAttempt = this.deps.runAttempts?.latest(run.id);
+    const baseScope =
+      previousAttempt && run.scope_snapshot
+        ? (run.scope_snapshot as unknown as RunScopeSnapshot)
+        : resolveRunScope(monde, mon);
     const harnessOverride = typeof run.execution.harness_override === "string" ? run.execution.harness_override : undefined;
     const selectedBaseScope = harnessOverride ? { ...baseScope, harness: harnessOverride } : baseScope;
     const adapter = getHarnessAdapter(selectedBaseScope.harness);
@@ -166,7 +188,11 @@ export class RunManager {
         `${adapter?.label ?? selectedBaseScope.harness} cannot enforce isolated runs: ${adapterDetection?.isolation_status ?? "unsupported"}`
       );
     }
-    const oldestQueued = this.deps.runs.getOldestQueuedForMon(run.monde_id, run.mon_id);
+    const oldestQueued = this.deps.runs.getOldestQueuedForMon(
+      run.monde_id,
+      run.mon_id,
+      new Date(this.clock.now()).toISOString()
+    );
     if (run.status === "queued" && oldestQueued && oldestQueued.id !== run.id) {
       return { run, started: false };
     }
@@ -185,10 +211,12 @@ export class RunManager {
         active_run_ids: reservation.activeRunIds
       };
     }
+    this.clearRetryTimer(run.id);
     let scope = selectedBaseScope;
     if (
-      selectedBaseScope.workspace_mode === "isolated" ||
-      selectedBaseScope.mon_json.actor_context.length > 0
+      !previousAttempt &&
+      (selectedBaseScope.workspace_mode === "isolated" ||
+        selectedBaseScope.mon_json.actor_context.length > 0)
     ) {
       if (!this.deps.config.dataDir) {
         this.deps.processSlots?.release(run.id);
@@ -211,12 +239,31 @@ export class RunManager {
       }
     }
     const runToken = createRunToken();
+    const attempt = this.deps.runAttempts?.begin(
+      run.id,
+      new Date(this.clock.now()).toISOString()
+    );
+    const attemptNumber =
+      attempt?.attempt_number ??
+      (typeof run.execution.process_attempt === "number"
+        ? run.execution.process_attempt + 1
+        : 1);
+    this.deps.externalExecutions?.markAttemptStartingByRun(
+      run.id,
+      attemptNumber,
+      new Date(this.clock.now()).toISOString()
+    );
     let externalMcp: ReturnType<RunManager["buildExternalMcpRuntime"]>;
     try {
-      externalMcp = this.buildExternalMcpRuntime(run, scope);
+      externalMcp = this.buildExternalMcpRuntime(run, scope, attemptNumber);
     } catch (error) {
       this.deps.processSlots?.release(run.id);
       this.deps.externalMcpGrants?.revokeForRun(run.id);
+      this.deps.runAttempts?.finish(run.id, attemptNumber, {
+        status: "failed",
+        condition: "launch_error",
+        error: error instanceof Error ? error.message : String(error)
+      });
       this.sealRunWorkspace(run.id);
       throw error;
     }
@@ -227,10 +274,20 @@ export class RunManager {
     const requestedSandboxMode = requestedSandboxModeForRun(run, scope);
     const sandboxMode = sandboxModeForHarness(scope.harness, requestedSandboxMode);
     const canWrite = canWriteForHarness(scope.harness, sandboxMode);
-    const diffCapture = canWrite && scope.workspace_mode === "shared"
-      ? captureGitBaseline(scope.monde_root)
-      : { enabled: false, reason: scope.workspace_mode === "isolated" ? "isolated_scratch_workspace" : "run_not_write_capable" };
+    const diffCapture =
+      attemptNumber > 1 && isRecord(run.execution.diff_capture)
+        ? run.execution.diff_capture
+        : canWrite && scope.workspace_mode === "shared"
+          ? captureGitBaseline(scope.monde_root)
+          : {
+              enabled: false,
+              reason:
+                scope.workspace_mode === "isolated"
+                  ? "isolated_scratch_workspace"
+                  : "run_not_write_capable"
+            };
     const execution = {
+      ...run.execution,
       runner: scope.harness,
       runner_type: runnerType,
       pid: null,
@@ -266,7 +323,11 @@ export class RunManager {
       required_external_mcp_servers: externalMcp.runtimes
         .filter((runtime) => runtime.server.required)
         .map((runtime) => runtime.server.id),
-      external_mcp_grant_ids: externalMcp.grantIds
+      external_mcp_grant_ids: externalMcp.grantIds,
+      process_attempt: attemptNumber,
+      retry_not_before: null,
+      retry_condition: null,
+      required_external_mcp_startup_error: false
     };
 
     this.deps.runs.updateScopeAndExecution(run.id, scope as unknown as Record<string, unknown>, execution);
@@ -276,7 +337,14 @@ export class RunManager {
     if (isRecord(diffCapture) && diffCapture.dirty_before === true) {
       this.addWarning(run.id, "dirty_worktree_before_run");
     }
-    this.deps.runs.updateLifecycle(run.id, startRunLifecycle(run));
+    const startingLifecycle = startRunLifecycle(
+      run,
+      new Date(this.clock.now()).toISOString()
+    );
+    if (run.started_at) {
+      startingLifecycle.started_at = run.started_at;
+    }
+    this.deps.runs.updateLifecycle(run.id, startingLifecycle);
     const externalExecution = this.deps.externalExecutions?.getByRunId(run.id);
     if (externalExecution) {
       this.deps.externalExecutions?.updatePhase(externalExecution.id, "starting");
@@ -290,13 +358,22 @@ export class RunManager {
       output_mode: outputMode,
       harness: scope.harness,
       mon_root: scope.mon_root,
-      work_root: scope.work_root
+      work_root: scope.work_root,
+      process_attempt: attemptNumber
+    });
+    this.deps.events.publish(run.id, "run_attempt_started", {
+      run_id: run.id,
+      process_attempt: attemptNumber
     });
     this.updatePlanAssignmentForRun(run, "active");
 
     const startingRun = this.requireRun(run.id);
     const runtimePrompt = buildRuntimePrompt(startingRun, scope.mon_json, scope.monde_json, scope as unknown as Record<string, unknown>);
     let runningProcess: RunningProcess;
+    const attemptActivity = {
+      observed: false,
+      stderrTail: ""
+    };
     try {
       runningProcess = await this.runner.startRun({
         runId: run.id,
@@ -312,11 +389,19 @@ export class RunManager {
         onSpawn: (pid) => {
           const current = this.requireRun(run.id);
           this.deps.runs.updateExecution(run.id, { ...current.execution, pid });
+          this.deps.runAttempts?.markActive(run.id, attemptNumber, pid);
         },
         onStdout: (chunk) => {
+          if (chunk.trim()) {
+            attemptActivity.observed = true;
+          }
           this.deps.events.publish(run.id, "run_output", { run_id: run.id, stream: "stdout", chunk });
         },
         onStderr: (chunk) => {
+          if (chunk.trim()) {
+            attemptActivity.observed = true;
+            attemptActivity.stderrTail = `${attemptActivity.stderrTail}${chunk}`.slice(-16_384);
+          }
           if (
             externalMcp.runtimes.some((runtime) => runtime.server.required) &&
             /\bmcp\b|model context protocol|initialize|startup/i.test(chunk)
@@ -329,19 +414,28 @@ export class RunManager {
           }
           this.deps.events.publish(run.id, "run_error_output", { run_id: run.id, stream: "stderr", chunk });
         },
-        onExit: (exit) => this.handleProcessExit(run.id, exit),
-        onError: (error) => this.handleProcessError(run.id, error)
+        onExit: (exit) => this.handleProcessExit(run.id, attemptNumber, exit),
+        onError: (error) => this.handleProcessError(run.id, attemptNumber, error)
       });
     } catch (error) {
-      this.handleProcessError(run.id, error instanceof Error ? error : new Error(String(error)));
+      this.handleProcessError(
+        run.id,
+        attemptNumber,
+        error instanceof Error ? error : new Error(String(error))
+      );
       return { run: this.requireRun(run.id), started: false };
     }
 
-    this.running.set(run.id, {
+    const runningRun: RunningRun = {
       process: runningProcess,
+      attemptNumber,
+      activity: attemptActivity,
       stopRequested: false,
+      timedOut: false,
       stalePoll: this.startScopeWarningPoll(run.id, scope, execution.scope_fingerprints)
-    });
+    };
+    this.running.set(run.id, runningRun);
+    this.deps.runAttempts?.markActive(run.id, attemptNumber, runningProcess.pid);
     this.deps.runs.updateLifecycle(run.id, markRunActive(startingRun));
     const latestExternal = externalExecution ? this.deps.externalExecutions?.get(externalExecution.id) : undefined;
     if (latestExternal?.phase === "cancelling") {
@@ -350,6 +444,7 @@ export class RunManager {
     } else if (latestExternal) {
       this.deps.externalExecutions?.updatePhase(latestExternal.id, "active");
     }
+    this.startAttemptTimeout(run.id, runningRun, scope.mon_json.retry_policy);
 
     return { run: this.requireRun(run.id), started: true };
   }
@@ -654,12 +749,14 @@ export class RunManager {
     }
 
     this.deps.runs.updateLifecycle(runId, finishRunStopped(run));
+    this.clearRetryTimer(runId);
     if (running) {
       running.stopRequested = true;
       running.process.kill("SIGTERM");
       if (running.stalePoll) {
         clearInterval(running.stalePoll);
       }
+      this.clearAttemptTimers(running);
     } else {
       this.deps.processSlots?.release(runId);
     }
@@ -692,6 +789,7 @@ export class RunManager {
 
   cancelRun(runId: string): RunRecord {
     const run = this.requireRun(runId);
+    this.clearRetryTimer(runId);
     this.deps.runs.updateLifecycle(runId, cancelQueuedRun(run));
     this.deps.processSlots?.release(runId);
     this.revokeRunToken(runId);
@@ -712,7 +810,11 @@ export class RunManager {
       return started;
     }
     while (true) {
-      const queued = this.deps.runs.getOldestQueuedForMon(mondeId, monId);
+      const queued = this.deps.runs.getOldestQueuedForMon(
+        mondeId,
+        monId,
+        new Date(this.clock.now()).toISOString()
+      );
       if (!queued) {
         break;
       }
@@ -721,6 +823,58 @@ export class RunManager {
         break;
       }
       started.push(result.run);
+    }
+    return started;
+  }
+
+  async resumeQueuedRunsOnStartup(): Promise<RunRecord[]> {
+    const targets = new Map<string, { mondeId: string; monId: string }>();
+    const now = this.clock.now();
+    for (const run of this.deps.runs.listQueued()) {
+      const retryAt = this.deps.runs.nextRetryAt(run.id);
+      if (retryAt && Date.parse(retryAt) > now) {
+        this.scheduleRetryWake(run, retryAt);
+        continue;
+      }
+      targets.set(`${run.monde_id}\0${run.mon_id}`, {
+        mondeId: run.monde_id,
+        monId: run.mon_id
+      });
+    }
+    const started: RunRecord[] = [];
+    for (const target of targets.values()) {
+      try {
+        started.push(
+          ...(await this.dispatchQueuedForMon(target.mondeId, target.monId))
+        );
+      } catch (error) {
+        this.recordDeferredDispatch(
+          target.mondeId,
+          target.monId,
+          error,
+          "startup"
+        );
+      }
+    }
+    return started;
+  }
+
+  async dispatchDueRetries(now = new Date(this.clock.now()).toISOString()): Promise<RunRecord[]> {
+    const started: RunRecord[] = [];
+    const targets = new Map<string, { mondeId: string; monId: string }>();
+    for (const run of this.deps.runs.listQueued()) {
+      const retryAt = this.deps.runs.nextRetryAt(run.id);
+      if (!retryAt || retryAt <= now) {
+        targets.set(`${run.monde_id}\0${run.mon_id}`, {
+          mondeId: run.monde_id,
+          monId: run.mon_id
+        });
+      }
+    }
+    for (const target of targets.values()) {
+      started.push(
+        ...(await this.dispatchQueuedForMon(target.mondeId, target.monId))
+      );
     }
     return started;
   }
@@ -962,6 +1116,13 @@ export class RunManager {
       if (run.interaction_mode === "hitl_thread") {
         continue;
       }
+      const attempt = this.deps.runAttempts?.latest(run.id);
+      if (attempt && (attempt.status === "starting" || attempt.status === "active")) {
+        this.deps.runAttempts?.finish(run.id, attempt.attempt_number, {
+          status: "lost",
+          condition: "process_lost"
+        });
+      }
       this.deps.runs.updateLifecycle(run.id, finishRunInterrupted(run, "lost"));
       this.deps.externalExecutions?.markProcessLostByRun(run.id);
       this.sealRunWorkspace(run.id);
@@ -1024,12 +1185,33 @@ export class RunManager {
     }
   }
 
-  private handleProcessExit(runId: string, exit: { code: number | null; signal: NodeJS.Signals | null }): void {
-    const running = this.running.get(runId);
-    if (running?.stalePoll) {
-      clearInterval(running.stalePoll);
+  private handleProcessExit(
+    runId: string,
+    attemptNumber: number,
+    exit: { code: number | null; signal: NodeJS.Signals | null }
+  ): void {
+    const recordedAttempt = this.deps.runAttempts?.get(
+      runId,
+      attemptNumber
+    );
+    if (
+      recordedAttempt &&
+      recordedAttempt.status !== "starting" &&
+      recordedAttempt.status !== "active"
+    ) {
+      return;
     }
-    this.running.delete(runId);
+    const running = this.running.get(runId);
+    if (running && running.attemptNumber !== attemptNumber) {
+      return;
+    }
+    if (running) {
+      this.clearAttemptTimers(running);
+      if (running.stalePoll) {
+        clearInterval(running.stalePoll);
+      }
+      this.running.delete(runId);
+    }
 
     const current = this.deps.runs.get(runId);
     this.deps.processSlots?.release(runId);
@@ -1037,102 +1219,418 @@ export class RunManager {
       return;
     }
     if (current.status === "finished") {
+      this.deps.runAttempts?.finish(runId, attemptNumber, {
+        status: running?.stopRequested ? "cancelled" : "failed",
+        condition: running?.stopRequested ? "process_interrupted" : undefined,
+        exitCode: exit.code,
+        exitSignal: exit.signal
+      });
       this.sealRunWorkspace(runId);
       void this.dispatchQueuedForMon(current.monde_id, current.mon_id);
       return;
     }
 
     const external = this.deps.externalExecutions?.getByRunId(runId);
+    const cancellationRequested =
+      running?.stopRequested === true ||
+      external?.phase === "cancelling" ||
+      current.runtime_state === "cancelling";
+    if (cancellationRequested) {
+      this.deps.runAttempts?.finish(runId, attemptNumber, {
+        status: "cancelled",
+        condition: "process_interrupted",
+        exitCode: exit.code,
+        exitSignal: exit.signal
+      });
+      const externalUpdated = external
+        ? this.deps.externalExecutions?.recordProcessExit(
+            external.id,
+            { code: exit.code, signal: exit.signal },
+            recoveryWindowSecondsForRun(current)
+          )
+        : undefined;
+      this.deps.runs.updateLifecycle(runId, {
+        ...finishRunStopped(current),
+        outcome: externalUpdated?.outcome === "cancelled" ? "canceled" : "stopped"
+      });
+      this.finishTerminalRun(runId, "run_process_exit", {
+        run_id: runId,
+        process_attempt: attemptNumber,
+        code: exit.code,
+        signal: exit.signal
+      });
+      return;
+    }
+
+    const condition = this.failureConditionForExit(current, running, exit);
+    if (condition) {
+      if (
+        this.retryOrFinishFailure(runId, attemptNumber, condition, {
+          exitCode: exit.code,
+          exitSignal: exit.signal
+        })
+      ) {
+        return;
+      }
+      if (external) {
+        if (exit.code !== 0 || exit.signal) {
+          this.deps.externalExecutions?.recordProcessExit(
+            external.id,
+            { code: exit.code, signal: exit.signal },
+            recoveryWindowSecondsForRun(current)
+          );
+          this.deps.externalExecutions?.setTerminalConditionByRun(runId, condition);
+        } else {
+          this.deps.externalExecutions?.markFailedByRun(runId, condition);
+        }
+      }
+      this.deps.runs.updateLifecycle(runId, finishRunFromExit(current, {
+        code: exit.code === 0 && !exit.signal ? 1 : exit.code,
+        signal: exit.signal
+      }));
+      this.finishTerminalRun(runId, "run_process_exit", {
+        run_id: runId,
+        process_attempt: attemptNumber,
+        code: exit.code,
+        signal: exit.signal,
+        condition
+      });
+      return;
+    }
+
+    this.deps.runAttempts?.finish(runId, attemptNumber, {
+      status: "succeeded",
+      exitCode: exit.code,
+      exitSignal: exit.signal
+    });
     const externalUpdated = external
       ? this.deps.externalExecutions?.recordProcessExit(
           external.id,
           { code: exit.code, signal: exit.signal },
-          typeof current.scope_snapshot?.recovery_window_seconds === "number"
-            ? current.scope_snapshot.recovery_window_seconds
-            : 86400
+          recoveryWindowSecondsForRun(current)
         )
       : undefined;
-    if (
-      externalUpdated?.outcome === "failed" &&
-      current.execution.required_external_mcp_startup_error === true
-    ) {
-      this.deps.externalExecutions?.setTerminalConditionByRun(runId, "required_mcp_unavailable");
-    }
-    const patch = externalUpdated?.outcome === "cancelled"
-      ? { ...finishRunStopped(current), outcome: "canceled" as const }
-      : running?.stopRequested
-        ? finishRunStopped(current)
-        : finishRunFromExit(current, exit);
-    this.deps.runs.updateLifecycle(runId, patch);
+    this.deps.runs.updateLifecycle(runId, finishRunFromExit(current, exit));
     if (externalUpdated?.phase === "awaiting_completion") {
       this.deps.runs.updateLifecycle(runId, {
         runtime_state: "awaiting_completion",
         outcome: "unknown",
         outcome_state: "unknown",
-        updated_at: new Date().toISOString()
+        updated_at: new Date(this.clock.now()).toISOString()
       });
     } else if (externalUpdated?.outcome === "succeeded") {
       this.deps.runs.updateLifecycle(runId, {
         runtime_state: "closed",
         outcome: "completed",
         outcome_state: "succeeded",
-        updated_at: new Date().toISOString()
+        updated_at: new Date(this.clock.now()).toISOString()
       });
     }
-    this.sealRunWorkspace(runId);
-    const finished = this.requireRun(runId);
-    this.finalizeWriteEvidence(runId);
-    this.revokeRunToken(runId);
-    this.deps.events.publish(runId, "run_process_exit", {
+    this.finishTerminalRun(runId, "run_process_exit", {
       run_id: runId,
+      process_attempt: attemptNumber,
       code: exit.code,
       signal: exit.signal
     });
-    this.deps.events.publish(runId, "run_finished", {
-      run_id: runId,
-      status: finished.status,
-      process_status: finished.process_status,
-      outcome: finished.outcome
-    });
-    this.updatePlanAssignmentForRun(finished, planAssignmentStatusForRun(finished));
-    void this.dispatchQueuedForMon(finished.monde_id, finished.mon_id);
   }
 
-  private handleProcessError(runId: string, error: Error): void {
-    const running = this.running.get(runId);
-    if (running?.stalePoll) {
-      clearInterval(running.stalePoll);
+  private handleProcessError(
+    runId: string,
+    attemptNumber: number,
+    error: Error
+  ): void {
+    const recordedAttempt = this.deps.runAttempts?.get(
+      runId,
+      attemptNumber
+    );
+    if (
+      recordedAttempt &&
+      recordedAttempt.status !== "starting" &&
+      recordedAttempt.status !== "active"
+    ) {
+      return;
     }
-    this.running.delete(runId);
+    const running = this.running.get(runId);
+    if (running && running.attemptNumber !== attemptNumber) {
+      return;
+    }
+    if (running) {
+      this.clearAttemptTimers(running);
+      if (running.stalePoll) {
+        clearInterval(running.stalePoll);
+      }
+      this.running.delete(runId);
+    }
     const current = this.deps.runs.get(runId);
     this.deps.processSlots?.release(runId);
     if (!current || current.status === "finished") {
       return;
     }
 
-    this.deps.runs.updateLifecycle(runId, finishRunInterrupted(current, "crashed"));
-    this.deps.externalExecutions?.markFailedByRun(
-      runId,
+    const condition: RetryCondition =
       current.execution.required_external_mcp_startup_error === true
         ? "required_mcp_unavailable"
-        : "process_crashed"
+        : looksLikeExpiredCredential(error.message)
+          ? "credential_expired"
+          : running
+            ? "process_interrupted"
+            : "launch_error";
+    this.deps.events.publish(runId, "run_error_output", {
+      run_id: runId,
+      process_attempt: attemptNumber,
+      stream: "stderr",
+      chunk: `${error.message}\n`
+    });
+    if (
+      this.retryOrFinishFailure(runId, attemptNumber, condition, {
+        error: error.message
+      })
+    ) {
+      return;
+    }
+
+    this.deps.runs.updateLifecycle(runId, finishRunInterrupted(current, "crashed"));
+    this.deps.externalExecutions?.markFailedByRun(runId, condition);
+    this.finishTerminalRun(runId, "run_attempt_failed", {
+      run_id: runId,
+      process_attempt: attemptNumber,
+      condition,
+      error: error.message
+    });
+  }
+
+  private retryOrFinishFailure(
+    runId: string,
+    attemptNumber: number,
+    condition: RetryCondition,
+    detail: {
+      exitCode?: number | null;
+      exitSignal?: string | null;
+      error?: string;
+    }
+  ): boolean {
+    const run = this.requireRun(runId);
+    const policy = retryPolicyForRun(run);
+    const shouldRetry =
+      attemptNumber < policy.max_attempts &&
+      policy.retryable_conditions.includes(condition) &&
+      this.deps.externalExecutions?.getByRunId(runId)?.cancellation_state !==
+        "requested" &&
+      this.deps.externalExecutions?.getByRunId(runId)?.cancellation_state !==
+        "signalled";
+    const nowMs = this.clock.now();
+    const now = new Date(nowMs).toISOString();
+    const retryAt = shouldRetry
+      ? new Date(nowMs + retryBackoffMs(policy, attemptNumber)).toISOString()
+      : undefined;
+    this.deps.runAttempts?.finish(runId, attemptNumber, {
+      status: "failed",
+      condition,
+      exitCode: detail.exitCode,
+      exitSignal: detail.exitSignal,
+      error: detail.error,
+      retryAt,
+      now
+    });
+    this.deps.events.publish(runId, "run_attempt_failed", {
+      run_id: runId,
+      process_attempt: attemptNumber,
+      condition,
+      retry_scheduled: shouldRetry,
+      ...(retryAt ? { retry_at: retryAt } : {}),
+      ...(detail.exitCode !== undefined ? { exit_code: detail.exitCode } : {}),
+      ...(detail.exitSignal ? { exit_signal: detail.exitSignal } : {}),
+      ...(detail.error ? { error: detail.error } : {})
+    });
+    if (!shouldRetry || !retryAt) {
+      return false;
+    }
+
+    this.revokeRunToken(runId);
+    const current = this.requireRun(runId);
+    const { run_token_hash: _revokedRunToken, ...execution } =
+      current.execution;
+    this.deps.runs.updateExecution(runId, {
+      ...execution,
+      pid: null,
+      process_attempt: attemptNumber,
+      retry_condition: condition,
+      retry_not_before: retryAt
+    });
+    this.deps.runs.updateLifecycle(runId, {
+      status: "queued",
+      process_status: "not_started",
+      outcome: "unknown",
+      runtime_state: "queued",
+      outcome_state: "unknown",
+      close_reason: null,
+      ended_at: null,
+      closed_at: null,
+      updated_at: now,
+      blocked_reason: null
+    });
+    this.deps.externalExecutions?.scheduleRetryByRun(
+      runId,
+      attemptNumber,
+      condition,
+      retryAt,
+      now
     );
+    this.updatePlanAssignmentForRun(this.requireRun(runId), "queued");
+    this.deps.events.publish(runId, "run_retry_scheduled", {
+      run_id: runId,
+      process_attempt: attemptNumber,
+      next_process_attempt: attemptNumber + 1,
+      condition,
+      retry_at: retryAt
+    });
+    this.scheduleRetryWake(this.requireRun(runId), retryAt);
+    void this.dispatchQueuedForMon(run.monde_id, run.mon_id);
+    return true;
+  }
+
+  private failureConditionForExit(
+    run: RunRecord,
+    running: RunningRun | undefined,
+    exit: { code: number | null; signal: NodeJS.Signals | null }
+  ): RetryCondition | undefined {
+    if (running?.timedOut) {
+      return "attempt_timeout";
+    }
+    if (run.execution.required_external_mcp_startup_error === true) {
+      return "required_mcp_unavailable";
+    }
+    if (looksLikeExpiredCredential(running?.activity.stderrTail ?? "")) {
+      return "credential_expired";
+    }
+    if (exit.signal) {
+      return "process_interrupted";
+    }
+    if (exit.code !== 0) {
+      return "process_exit_nonzero";
+    }
+    const policy = retryPolicyForRun(run);
+    if (
+      policy.retryable_conditions.includes("harness_noop") &&
+      running?.activity.observed !== true
+    ) {
+      return "harness_noop";
+    }
+    return undefined;
+  }
+
+  private startAttemptTimeout(
+    runId: string,
+    running: RunningRun,
+    policy: RunRetryPolicy
+  ): void {
+    if (!policy.attempt_timeout_seconds) {
+      return;
+    }
+    running.attemptTimeout = this.clock.setTimeout(() => {
+      const current = this.running.get(runId);
+      if (!current || current.attemptNumber !== running.attemptNumber) {
+        return;
+      }
+      current.timedOut = true;
+      this.deps.events.publish(runId, "run_attempt_timeout", {
+        run_id: runId,
+        process_attempt: current.attemptNumber,
+        timeout_seconds: policy.attempt_timeout_seconds
+      });
+      current.process.kill("SIGTERM");
+      current.killTimer = this.clock.setTimeout(() => {
+        const latest = this.running.get(runId);
+        if (latest && latest.attemptNumber === current.attemptNumber) {
+          latest.process.kill("SIGKILL");
+        }
+      }, policy.kill_grace_seconds * 1000);
+      current.killTimer.unref();
+    }, policy.attempt_timeout_seconds * 1000);
+    running.attemptTimeout.unref();
+  }
+
+  private clearAttemptTimers(running: RunningRun): void {
+    if (running.attemptTimeout) {
+      this.clock.clearTimeout(running.attemptTimeout);
+      running.attemptTimeout = undefined;
+    }
+    if (running.killTimer) {
+      this.clock.clearTimeout(running.killTimer);
+      running.killTimer = undefined;
+    }
+  }
+
+  private scheduleRetryWake(run: RunRecord, retryAt: string): void {
+    this.clearRetryTimer(run.id);
+    const delay = Math.max(0, Date.parse(retryAt) - this.clock.now());
+    const timer = this.clock.setTimeout(() => {
+      this.retryTimers.delete(run.id);
+      void this.dispatchQueuedForMon(run.monde_id, run.mon_id).catch((error) => {
+        this.recordDeferredDispatch(
+          run.monde_id,
+          run.mon_id,
+          error,
+          "retry_wake"
+        );
+      });
+    }, delay);
+    timer.unref();
+    this.retryTimers.set(run.id, timer);
+  }
+
+  private clearRetryTimer(runId: string): void {
+    const timer = this.retryTimers.get(runId);
+    if (!timer) {
+      return;
+    }
+    this.clock.clearTimeout(timer);
+    this.retryTimers.delete(runId);
+  }
+
+  private recordDeferredDispatch(
+    mondeId: string,
+    monId: string,
+    error: unknown,
+    source: "startup" | "retry_wake"
+  ): void {
+    const run = this.deps.runs.getOldestQueuedForMon(
+      mondeId,
+      monId,
+      new Date(this.clock.now()).toISOString()
+    );
+    if (!run) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    this.deps.events.publish(run.id, "run_dispatch_deferred", {
+      run_id: run.id,
+      source,
+      error: message
+    });
+  }
+
+  private finishTerminalRun(
+    runId: string,
+    evidenceEvent: string,
+    evidence: Record<string, unknown>
+  ): void {
+    this.clearRetryTimer(runId);
     this.sealRunWorkspace(runId);
     const finished = this.requireRun(runId);
     this.finalizeWriteEvidence(runId);
     this.revokeRunToken(runId);
-    this.deps.events.publish(runId, "run_error_output", {
-      run_id: runId,
-      stream: "stderr",
-      chunk: `${error.message}\n`
-    });
+    this.deps.events.publish(runId, evidenceEvent, evidence);
     this.deps.events.publish(runId, "run_finished", {
       run_id: runId,
       status: finished.status,
       process_status: finished.process_status,
       outcome: finished.outcome
     });
-    this.updatePlanAssignmentForRun(finished, "blocked");
+    this.updatePlanAssignmentForRun(
+      finished,
+      planAssignmentStatusForRun(finished)
+    );
     void this.dispatchQueuedForMon(finished.monde_id, finished.mon_id);
   }
 
@@ -1327,7 +1825,8 @@ export class RunManager {
 
   private buildExternalMcpRuntime(
     run: RunRecord,
-    scope: RunScopeSnapshot
+    scope: RunScopeSnapshot,
+    attemptNumber: number
   ): { runtimes: ExternalMcpRuntime[]; grantIds: string[]; introspectionUrl?: string } {
     const runtimes: ExternalMcpRuntime[] = [];
     const grantIds: string[] = [];
@@ -1340,11 +1839,12 @@ export class RunManager {
         if (!this.deps.externalMcpGrants) {
           throw new Error(`External MCP grant storage is unavailable for server ${server.id}.`);
         }
-        const expiresAt = new Date(Date.now() + scope.recovery_window_seconds * 1000).toISOString();
+        const expiresAt = new Date(this.clock.now() + 60 * 60 * 1000).toISOString();
         const issued = this.deps.externalMcpGrants.issue({
           externalExecutionId: externalExecution?.id,
           runId: run.id,
           serverId: server.id,
+          attemptNumber,
           audience: server.auth.audience,
           claims: {
             run_id: run.id,
@@ -1428,6 +1928,53 @@ export class RunManager {
 
     this.deps.plans.updateAssignmentStatusForRun(run.origin.assignment, status, run.id);
   }
+}
+
+function retryPolicyForRun(run: RunRecord): RunRetryPolicy {
+  const snapshot = run.scope_snapshot as
+    | { mon_json?: { retry_policy?: RunRetryPolicy } }
+    | undefined;
+  return (
+    snapshot?.mon_json?.retry_policy ?? {
+      max_attempts: 1,
+      initial_backoff_seconds: 5,
+      backoff_multiplier: 2,
+      max_backoff_seconds: 300,
+      kill_grace_seconds: 5,
+      retryable_conditions: [
+        "launch_error",
+        "process_exit_nonzero",
+        "process_interrupted",
+        "required_mcp_unavailable",
+        "attempt_timeout",
+        "credential_expired"
+      ]
+    }
+  );
+}
+
+function retryBackoffMs(
+  policy: RunRetryPolicy,
+  failedAttemptNumber: number
+): number {
+  const seconds = Math.min(
+    policy.max_backoff_seconds,
+    policy.initial_backoff_seconds *
+      policy.backoff_multiplier ** Math.max(0, failedAttemptNumber - 1)
+  );
+  return Math.round(seconds * 1000);
+}
+
+function looksLikeExpiredCredential(value: string): boolean {
+  return /\b(?:credential|credentials|token|authorization|authentication)\b.{0,80}\b(?:expired|expiry|unauthorized|invalid|refresh|required)\b|\b401\b/i.test(
+    value
+  );
+}
+
+function recoveryWindowSecondsForRun(run: RunRecord): number {
+  return typeof run.scope_snapshot?.recovery_window_seconds === "number"
+    ? run.scope_snapshot.recovery_window_seconds
+    : 86400;
 }
 
 function planAssignmentStatusForRun(run: RunRecord): PlanAssignmentStatus {

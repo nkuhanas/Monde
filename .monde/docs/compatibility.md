@@ -1,6 +1,6 @@
 # Compatibility And Migration
 
-The service database migrates forward to schema version 13 at startup. Startup
+The service database migrates forward to schema version 14 at startup. Startup
 still refuses a database whose schema is newer than the running service.
 
 ## Existing Mon Defaults
@@ -13,7 +13,10 @@ Missing fields retain legacy behavior:
   "run_workspace": { "mode": "shared" },
   "actor_context": [],
   "read_mounts": [],
-  "external_mcp_servers": []
+  "external_mcp_servers": [],
+  "retry_policy": {
+    "max_attempts": 1
+  }
 }
 ```
 
@@ -24,9 +27,12 @@ Existing Mons therefore keep:
 - current prompt, event, and artifact retention
 - existing path-referenced artifacts
 - no external MCP servers
+- one process attempt per logical run, with no automatic retry
 
 Concurrency is opt-in. `max_active_runs > 1` is rejected unless
-`run_workspace.mode` is `isolated`.
+`run_workspace.mode` is `isolated`. Retry is also opt-in by setting
+`retry_policy.max_attempts` above one; the default does not relaunch existing
+Mons.
 
 ## New Tables
 
@@ -41,6 +47,7 @@ Migrations add:
 - `execution_manifest_availability`
 - `cron_schedules`
 - `cron_fires`
+- `run_attempts`
 
 Existing run, log, event, plan, and artifact rows are not rewritten into
 TeaParty-specific shapes.
@@ -53,6 +60,11 @@ Schema 13 reclassifies historical `user_closed_widget` HITL threads from
 `unknown` to `succeeded` only when their persisted final execution state has no
 unresolved chat error or timeout. Historical threads with an unresolved error
 remain reviewable; their event and log evidence is unchanged.
+
+Schema 14 adds durable per-run process attempts, retry wake timestamps,
+attempt-scoped external MCP grants, and stable-key integration cron metadata.
+It preserves existing logical run IDs, stable external execution keys, and
+terminal outcomes. Existing schedules remain ordinary prompt schedules.
 
 ## Isolation Compatibility
 
@@ -86,12 +98,14 @@ Restore rehearsal never replaces the live DB.
 This progression does not add:
 
 - model or machine routing
-- automatic retry/backoff policy
 - a workflow engine
 - TeaParty Persona, Pater, Trinity, or Filius schemas
 - artifact byte/blob storage
 - semantic pipeline validation
 - prompt/event redaction
 
-Generic cron is a separate Monde capability. It enqueues normal runs and does
-not define workflows or retry policy.
+Generic retry/backoff is a Mon execution policy, not a TeaParty workflow or
+queue policy. It retries process attempts within one Monde logical run for
+configured operational conditions. Generic cron is a separate Monde
+capability; it can enqueue ordinary runs or stable-key integration runs and
+does not define workflows, model routing, or machine routing.

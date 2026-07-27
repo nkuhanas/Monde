@@ -1,7 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import { CronExpressionParser } from "cron-parser";
 import { nanoid } from "nanoid";
-import type { RunRecord } from "@monde/core";
+import { canonicalSha256, type RunRecord } from "@monde/core";
+import {
+  createExternalRun,
+  integrationContextPrompt
+} from "../external-runs.js";
+import {
+  ExternalExecutionRepository,
+  type ExternalExecutionRecord
+} from "./external-executions.js";
 import { RunRepository } from "./runs.js";
 
 export interface CronScheduleRecord {
@@ -15,6 +23,10 @@ export interface CronScheduleRecord {
   prompt: string;
   harness_override: string | null;
   sandbox_mode: string | null;
+  integration_id: string | null;
+  external_schedule_key: string | null;
+  request_digest: string | null;
+  context_packet?: unknown;
   enabled: boolean;
   next_fire_at: string | null;
   pending_first_fire_at: string | null;
@@ -33,19 +45,27 @@ export interface CronFireRecord {
   coalesced_from_fire_time: string | null;
   fired_at: string;
   run_id: string;
+  external_execution_key: string | null;
 }
 
 export interface CronTickResult {
   schedule: CronScheduleRecord;
   fire: CronFireRecord;
   run: RunRecord;
+  external_execution?: ExternalExecutionRecord;
+}
+
+export class CronScheduleConflictError extends Error {
+  readonly code = "schedule_digest_conflict";
 }
 
 export class CronScheduleRepository {
   private readonly runs: RunRepository;
+  private readonly externalExecutions: ExternalExecutionRepository;
 
   constructor(private readonly db: DatabaseSync) {
     this.runs = new RunRepository(db);
+    this.externalExecutions = new ExternalExecutionRepository(db);
   }
 
   create(input: {
@@ -98,6 +118,102 @@ export class CronScheduleRepository {
         updated_at: now
       });
     return this.get(id)!;
+  }
+
+  createIntegrationOrGet(input: {
+    integrationId: string;
+    externalScheduleKey: string;
+    requestDigest: string;
+    mondeId: string;
+    monId: string;
+    name: string;
+    expression: string;
+    timezone: string;
+    title: string;
+    contextPacket: unknown;
+    harnessOverride?: string;
+    sandboxMode?: string;
+    enabled?: boolean;
+    now?: string;
+  }): { schedule: CronScheduleRecord; created: boolean } {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.getByExternalKey(
+        input.integrationId,
+        input.externalScheduleKey
+      );
+      if (existing) {
+        if (existing.request_digest !== input.requestDigest) {
+          throw new CronScheduleConflictError(
+            `Schedule key ${input.integrationId}/${input.externalScheduleKey} already has a different digest.`
+          );
+        }
+        this.db.exec("COMMIT");
+        return { schedule: existing, created: false };
+      }
+
+      const now = input.now ?? new Date().toISOString();
+      const enabled = input.enabled ?? true;
+      const id = `cron_${nanoid(12)}`;
+      this.db
+        .prepare(
+          `INSERT INTO cron_schedules (
+             id, monde_id, mon_id, name, expression, timezone, title, prompt,
+             harness_override, sandbox_mode, integration_id,
+             external_schedule_key, request_digest, context_packet_json,
+             enabled, next_fire_at, pending_first_fire_at, pending_fire_at,
+             last_scheduled_fire_at, last_fired_at, archived_at, created_at, updated_at
+           ) VALUES (
+             @id, @monde_id, @mon_id, @name, @expression, @timezone, @title, @prompt,
+             @harness_override, @sandbox_mode, @integration_id,
+             @external_schedule_key, @request_digest, @context_packet_json,
+             @enabled, @next_fire_at, NULL, NULL, NULL, NULL, NULL, @created_at, @updated_at
+           )`
+        )
+        .run({
+          id,
+          monde_id: input.mondeId,
+          mon_id: input.monId,
+          name: input.name,
+          expression: input.expression,
+          timezone: input.timezone,
+          title: input.title,
+          prompt: integrationContextPrompt(input.contextPacket),
+          harness_override: input.harnessOverride ?? null,
+          sandbox_mode: input.sandboxMode ?? null,
+          integration_id: input.integrationId,
+          external_schedule_key: input.externalScheduleKey,
+          request_digest: input.requestDigest,
+          context_packet_json: JSON.stringify(input.contextPacket),
+          enabled: enabled ? 1 : 0,
+          next_fire_at: enabled
+            ? nextCronFire(input.expression, input.timezone, now)
+            : null,
+          created_at: now,
+          updated_at: now
+        });
+      const schedule = this.get(id)!;
+      this.db.exec("COMMIT");
+      return { schedule, created: true };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  getByExternalKey(
+    integrationId: string,
+    externalScheduleKey: string
+  ): CronScheduleRecord | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM cron_schedules
+         WHERE integration_id = ? AND external_schedule_key = ?`
+      )
+      .get(integrationId, externalScheduleKey) as
+      | CronScheduleRow
+      | undefined;
+    return row ? fromRow(row) : undefined;
   }
 
   get(id: string): CronScheduleRecord | undefined {
@@ -334,8 +450,68 @@ export class CronScheduleRepository {
         return undefined;
       }
 
-      const run = cronRun(schedule, now);
-      this.runs.insert(run);
+      const externalExecutionKey =
+        schedule.integration_id &&
+        schedule.external_schedule_key &&
+        schedule.context_packet !== undefined
+          ? cronExternalExecutionKey(
+              schedule.external_schedule_key,
+              schedule.pending_fire_at
+            )
+          : null;
+      const run =
+        externalExecutionKey &&
+        schedule.integration_id &&
+        schedule.context_packet !== undefined
+          ? createExternalRun({
+              integrationId: schedule.integration_id,
+              externalExecutionKey,
+              mondeId: schedule.monde_id,
+              monId: schedule.mon_id,
+              prompt: integrationContextPrompt(schedule.context_packet),
+              completionPolicy: "process_exit",
+              contextPacketDigest: canonicalSha256(schedule.context_packet),
+              harnessOverride: schedule.harness_override ?? undefined,
+              sandboxMode: schedule.sandbox_mode ?? undefined,
+              origin: {
+                type: "cron",
+                cron_id: schedule.id,
+                scheduled_fire_time: schedule.pending_fire_at,
+                fired_at: now
+              },
+              title: schedule.title,
+              createdAt: now
+            })
+          : cronRun(schedule, now);
+      const externalExecution =
+        externalExecutionKey &&
+        schedule.integration_id &&
+        schedule.context_packet !== undefined
+          ? this.externalExecutions.createOrGetInTransaction({
+              integrationId: schedule.integration_id,
+              externalExecutionKey,
+              requestDigest: canonicalSha256({
+                integration_id: schedule.integration_id,
+                external_execution_key: externalExecutionKey,
+                monde_id: schedule.monde_id,
+                mon_id: schedule.mon_id,
+                schedule_digest: schedule.request_digest,
+                scheduled_fire_time: schedule.pending_fire_at,
+                context_packet: schedule.context_packet
+              }),
+              run,
+              externalScope: schedule.context_packet,
+              externalContext: schedule.context_packet,
+              completionPolicy: "process_exit",
+              now
+            }).execution
+          : undefined;
+      if (!externalExecution) {
+        this.runs.insert(run);
+      }
+      const persistedRun = externalExecution
+        ? this.runs.get(externalExecution.run_id)!
+        : run;
       const fire: CronFireRecord = {
         id: `cron_fire_${nanoid(12)}`,
         cron_id: schedule.id,
@@ -346,14 +522,17 @@ export class CronScheduleRepository {
             ? schedule.pending_first_fire_at
             : null,
         fired_at: now,
-        run_id: run.id
+        run_id: persistedRun.id,
+        external_execution_key: externalExecutionKey
       };
       this.db
         .prepare(
           `INSERT INTO cron_fires (
-             id, cron_id, scheduled_fire_time, coalesced_from_fire_time, fired_at, run_id
+             id, cron_id, scheduled_fire_time, coalesced_from_fire_time, fired_at,
+             run_id, external_execution_key
            ) VALUES (
-             @id, @cron_id, @scheduled_fire_time, @coalesced_from_fire_time, @fired_at, @run_id
+             @id, @cron_id, @scheduled_fire_time, @coalesced_from_fire_time, @fired_at,
+             @run_id, @external_execution_key
            )`
         )
         .run(fire);
@@ -374,7 +553,12 @@ export class CronScheduleRepository {
         });
       const updated = this.require(id);
       this.db.exec("COMMIT");
-      return { schedule: updated, fire, run };
+      return {
+        schedule: updated,
+        fire,
+        run: persistedRun,
+        ...(externalExecution ? { external_execution: externalExecution } : {})
+      };
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -476,11 +660,23 @@ function cronRun(schedule: CronScheduleRecord, firedAt: string): RunRecord {
 
 interface CronScheduleRow extends Omit<CronScheduleRecord, "enabled"> {
   enabled: number;
+  context_packet_json: string | null;
 }
 
 function fromRow(row: CronScheduleRow): CronScheduleRecord {
+  const { context_packet_json: contextPacketJson, ...record } = row;
   return {
-    ...row,
-    enabled: row.enabled === 1
+    ...record,
+    enabled: row.enabled === 1,
+    ...(contextPacketJson !== null
+      ? { context_packet: JSON.parse(contextPacketJson) }
+      : {})
   };
+}
+
+function cronExternalExecutionKey(
+  externalScheduleKey: string,
+  scheduledFireTime: string
+): string {
+  return `${externalScheduleKey}:${scheduledFireTime}`;
 }

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 
 export function createRunToken(): string {
-  return crypto.randomBytes(32).toString("base64url");
+  return `run_${crypto.randomBytes(32).toString("base64url")}`;
 }
 
 export function hashRunToken(token: string): string {

@@ -1,7 +1,7 @@
 import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
-import type { ArtifactDetailDto, ArtifactDto, LogEventDto, RunDto, RunEventDto } from "@monde/core";
+import type { ArtifactDetailDto, ArtifactDto, LogEventDto, RunAttemptDto, RunDto, RunEventDto } from "@monde/core";
 import { Badge, EmptyState, EvidencePanel } from "../../components/ui";
 import { ageLabel, formatDate, tabLabel } from "../../lib/format";
 import { isRecord } from "../../lib/guards";
@@ -21,6 +21,7 @@ export interface RunDetailProps {
   run: RunDto;
   events: RunEventDto[];
   logs: LogEventDto[];
+  attempts: RunAttemptDto[];
   artifacts: ArtifactDto[];
   artifactDetails: Record<string, ArtifactDetailDto>;
   scope: Record<string, unknown> | null;
@@ -55,6 +56,10 @@ export function RunDetail(props: RunDetailProps) {
   const acceptsInput = runAcceptsInput(run);
   const reviewed = typeof run.result?.reviewed_at === "string";
   const needsReview = runNeedsReview(run);
+  const retryNotBefore =
+    typeof run.execution?.retry_not_before === "string"
+      ? run.execution.retry_not_before
+      : undefined;
   const [activeDetailTab, setActiveDetailTab] = useState<RunDetailTab>("overview");
 
   useEffect(() => setActiveDetailTab("overview"), [run.id]);
@@ -76,7 +81,7 @@ export function RunDetail(props: RunDetailProps) {
               <span className="run-id" title={run.id}>{run.id}</span>
             </div>
             <div className="review-actions">
-              {run.status === "queued" ? <button className="run-primary-action" onClick={props.onStart}>Start</button> : null}
+              {run.status === "queued" && !retryNotBefore ? <button className="run-primary-action" onClick={props.onStart}>Start</button> : null}
               {run.status === "active" || run.status === "starting" ? (
                 <>
                   <button onClick={props.onInterrupt}>Interrupt</button>
@@ -92,6 +97,8 @@ export function RunDetail(props: RunDetailProps) {
             <Badge>{threadRuntimeLabel(run.runtime_state)}</Badge>
             {run.outcome !== "unknown" ? <Badge tone={outcomeTone(run.outcome)}>{run.outcome}</Badge> : null}
             <Badge>{String(run.execution?.runner_type ?? run.execution?.runner ?? "runner unknown")}</Badge>
+            {typeof run.execution?.process_attempt === "number" ? <Badge>attempt {run.execution.process_attempt}</Badge> : null}
+            {retryNotBefore ? <Badge tone="amber">retry at {formatDate(retryNotBefore)}</Badge> : null}
             <Badge tone={run.execution?.can_write === true ? "amber" : "default"}>{run.execution?.can_write === true ? "write enabled" : "read only"}</Badge>
             {run.warnings?.length ? <Badge tone="red">{run.warnings.length} warning{run.warnings.length === 1 ? "" : "s"}</Badge> : null}
           </div>
@@ -105,7 +112,7 @@ export function RunDetail(props: RunDetailProps) {
                 onClick={() => setActiveDetailTab(detailTab)}
               >
                 {tabLabel(detailTab)}
-                {detailTab === "evidence" && (props.artifacts.length || props.logs.length) ? <span>{props.artifacts.length + props.logs.length}</span> : null}
+                {detailTab === "evidence" && (props.artifacts.length || props.logs.length || props.attempts.length) ? <span>{props.artifacts.length + props.logs.length + props.attempts.length}</span> : null}
               </button>
             ))}
           </nav>
@@ -197,7 +204,19 @@ function OverviewTab({ props, reviewed, needsReview }: { props: RunDetailProps; 
           <OverviewStat label="Current state" value={threadRuntimeLabel(run.runtime_state)} detail={`${run.process_status} process`} />
           <OverviewStat label="Outcome" value={run.outcome_state === "unknown" ? run.outcome : run.outcome_state} detail={run.close_reason ?? "No close reason"} />
           <OverviewStat label="Evidence" value={`${props.artifacts.length} artifacts`} detail={`${props.logs.length} log events`} />
-          <OverviewStat label="Execution" value={String(run.execution?.runner_type ?? run.execution?.runner ?? "Unknown runner")} detail={run.execution?.can_write === true ? "Write enabled" : "Read only"} />
+          <OverviewStat
+            label="Execution"
+            value={String(run.execution?.runner_type ?? run.execution?.runner ?? "Unknown runner")}
+            detail={
+              retryNotBeforeForRun(run)
+                ? `Retry scheduled ${formatDate(retryNotBeforeForRun(run)!)}`
+                : typeof run.execution?.process_attempt === "number"
+                  ? `Process attempt ${run.execution.process_attempt}`
+                  : run.execution?.can_write === true
+                    ? "Write enabled"
+                    : "Read only"
+            }
+          />
         </aside>
       </div>
     </section>
@@ -249,6 +268,7 @@ function EvidenceTab({ props }: { props: RunDetailProps }) {
         <ResultEvidence run={run} />
       </div>
       <ArtifactEvidence artifacts={props.artifacts} />
+      <AttemptEvidence attempts={props.attempts} />
       <LogEvidence logs={props.logs} />
       <details className="artifact-register-panel">
         <summary>Add artifact</summary>
@@ -261,6 +281,48 @@ function EvidenceTab({ props }: { props: RunDetailProps }) {
           <button type="submit">Register artifact</button>
         </form>
       </details>
+    </section>
+  );
+}
+
+function AttemptEvidence({ attempts }: { attempts: RunAttemptDto[] }) {
+  return (
+    <section className="evidence-collection">
+      <div className="evidence-collection-head">
+        <div>
+          <span className="eyebrow">Process attempts</span>
+          <h4>{attempts.length ? `${attempts.length} launch${attempts.length === 1 ? "" : "es"}` : "No process attempt recorded"}</h4>
+        </div>
+        <Badge>{attempts.length}</Badge>
+      </div>
+      {attempts.length ? (
+        <div className="log-evidence-list">
+          {attempts.map((attempt) => (
+            <article className="log-evidence-row" key={attempt.id}>
+              <div className="log-evidence-meta">
+                <Badge tone={attemptTone(attempt.status)}>attempt {attempt.attempt_number}</Badge>
+                <Badge tone={attemptTone(attempt.status)}>{humanizeEvidenceLabel(attempt.status)}</Badge>
+                <time dateTime={attempt.started_at}>{formatDate(attempt.started_at)}</time>
+              </div>
+              <p>
+                {attempt.condition
+                  ? humanizeEvidenceLabel(attempt.condition)
+                  : attempt.status === "succeeded"
+                    ? "Process exited successfully."
+                    : "No failure condition was recorded."}
+              </p>
+              {(attempt.exit_code !== null || attempt.exit_signal || attempt.retry_at || attempt.error) ? (
+                <dl className="result-evidence-list">
+                  {attempt.exit_code !== null ? <div><dt>Exit code</dt><dd>{attempt.exit_code}</dd></div> : null}
+                  {attempt.exit_signal ? <div><dt>Signal</dt><dd>{attempt.exit_signal}</dd></div> : null}
+                  {attempt.retry_at ? <div><dt>Retry at</dt><dd>{formatDate(attempt.retry_at)}</dd></div> : null}
+                  {attempt.error ? <div><dt>Error</dt><dd>{attempt.error}</dd></div> : null}
+                </dl>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      ) : <p className="evidence-empty-copy">This run has not launched a process.</p>}
     </section>
   );
 }
@@ -373,6 +435,19 @@ function logTone(eventType: string): "default" | "green" | "amber" | "red" | "bl
   if (eventType === "milestone" || eventType === "review") return "green";
   if (eventType === "decision" || eventType === "audit") return "blue";
   return "default";
+}
+
+function attemptTone(status: RunAttemptDto["status"]): "default" | "green" | "amber" | "red" | "blue" {
+  if (status === "succeeded") return "green";
+  if (status === "failed" || status === "lost") return "red";
+  if (status === "cancelled") return "amber";
+  return "blue";
+}
+
+function retryNotBeforeForRun(run: RunDto): string | undefined {
+  return typeof run.execution?.retry_not_before === "string"
+    ? run.execution.retry_not_before
+    : undefined;
 }
 
 function humanizeEvidenceLabel(value: string): string {

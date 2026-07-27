@@ -17,6 +17,7 @@ import { MonRepository } from "./repositories/mons.js";
 import { MondeRepository } from "./repositories/mondes.js";
 import { PlanRepository } from "./repositories/plans.js";
 import { ProcessSlotRepository } from "./repositories/process-slots.js";
+import { RunAttemptRepository } from "./repositories/run-attempts.js";
 import { RunEventRepository } from "./repositories/run-events.js";
 import { RunRepository } from "./repositories/runs.js";
 import { RunWorkspaceRepository } from "./repositories/run-workspaces.js";
@@ -41,6 +42,7 @@ export async function createService() {
   const plans = new PlanRepository(database.db);
   const processSlots = new ProcessSlotRepository(database.db);
   const runs = new RunRepository(database.db);
+  const runAttempts = new RunAttemptRepository(database.db);
   const runEvents = new RunEventRepository(database.db);
   const runWorkspaces = new RunWorkspaceRepository(database.db);
   const eventBus = new RunEventBus(runEvents);
@@ -57,6 +59,7 @@ export async function createService() {
     mons,
     plans,
     processSlots,
+    runAttempts,
     runs,
     runWorkspaces,
     logs,
@@ -139,6 +142,7 @@ export async function createService() {
     mons,
     plans,
     runs,
+    runAttempts,
     runEvents,
     eventBus,
     runManager,
@@ -152,6 +156,7 @@ export async function createService() {
       ensureDirectory(paths.runtimeDir);
       await app.listen({ host: config.host, port: config.webPort });
       await mcpApp.listen({ host: config.host, port: config.mcpPort });
+      await runManager.resumeQueuedRunsOnStartup();
       cronScheduler.start();
       fs.writeFileSync(
         paths.metadataPath,

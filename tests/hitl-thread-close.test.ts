@@ -70,11 +70,9 @@ test("schema migration backfills only clean historical thread closures", (t) => 
   const runs = new RunRepository(db);
   runs.insert(closedThread("run_clean", null));
   runs.insert(closedThread("run_error", "adapter turn failed"));
-  db.prepare("UPDATE schema_meta SET value = '12' WHERE key = 'schema_version'").run();
-
   migrateDatabase(db);
 
-  assert.equal(schemaVersion, 13);
+  assert.equal(schemaVersion, 14);
   assert.equal(runs.get("run_clean")?.outcome, "completed");
   assert.equal(runs.get("run_clean")?.outcome_state, "succeeded");
   assert.equal(runs.get("run_error")?.outcome, "unknown");

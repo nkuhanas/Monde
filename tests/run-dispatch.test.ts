@@ -63,6 +63,30 @@ test("process slot reservation atomically enforces the configured limit", (t) =>
   assert.deepEqual(denied.activeRunIds, ["run_a", "run_b"]);
 });
 
+test("slot admission honors persisted active process runs missing legacy slot rows", (t) => {
+  const { runs, slots } = fixture(t);
+  const active: RunRecord = {
+    ...run("run_active", "2026-01-01T00:00:01.000Z"),
+    status: "active",
+    process_status: "running",
+    runtime_state: "running",
+    started_at: "2026-01-01T00:00:01.000Z"
+  };
+  runs.insert(active);
+
+  const denied = slots.reserve({
+    runId: "run_queued",
+    mondeId: "m",
+    monId: "mon",
+    kind: "one_shot",
+    limit: 1
+  });
+
+  assert.equal(denied.reserved, false);
+  assert.deepEqual(denied.activeRunIds, ["run_active"]);
+  assert.equal(runs.get("run_active")?.status, "active");
+});
+
 test("active lookup returns all process runs and queue lookup remains oldest-first", (t) => {
   const { runs } = fixture(t);
   const first = run("run_first", "2026-01-01T00:00:01.000Z");

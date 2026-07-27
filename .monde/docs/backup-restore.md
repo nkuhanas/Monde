@@ -55,6 +55,12 @@ current retention model, so they are included in database backups. This
 progression does not claim prompt/event redaction or selective backup
 exclusion.
 
+Operational backups also include logical run retry state, the ordered
+`run_attempts` ledger, retry wake times, cron schedules and fires, stable
+external execution keys, and revoked/active grant metadata. They do not include
+live process handles or local retry timers; those are reconstructed from
+persisted state during startup reconciliation.
+
 TeaParty should back up separately:
 
 - TeaParty domain state
@@ -63,4 +69,5 @@ TeaParty should back up separately:
 - staged artifact bytes and admitted Assets
 
 Monde backups cover only Monde operational state and immutable manifest
-references.
+references. TeaParty must not infer that restoring Monde also restores its
+QueueItem state, domain retry decisions, or materialized output.

@@ -74,6 +74,7 @@ Run Review should make these fields obvious:
 - lifecycle/process/outcome
 - `finished/exited/unknown` review warning for ordinary review-governed runs
 - stable-key integration status without implying downstream domain validation
+- process-attempt history and a legible pending-retry state
 - runner, runner type, interaction mode, input mode, output mode
 - write/sandbox/approval metadata
 - terminal/output stream
@@ -121,7 +122,8 @@ Artifacts are path references in MVP, not blob storage.
 
 Cron has its own top-level operator surface. It lists generic Monde schedules,
 target Mons, timezone-aware expressions, next fires, enablement, and archive
-controls. Cron runs flow through the normal Runs and Review surfaces.
+controls. Cron runs flow through the normal Runs and Review surfaces, where
+their Mon-level process attempts and retry state remain visible.
 
 ## Deferred Areas
 

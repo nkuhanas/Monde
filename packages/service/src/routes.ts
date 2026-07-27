@@ -11,6 +11,7 @@ import {
   ExternalMcpServerSchema,
   finishRunFromExit,
   MonConfigSchema,
+  RunRetryPolicySchema,
   resolveWorkRoot
 } from "@monde/core";
 import type {
@@ -24,7 +25,10 @@ import type { RunCloseReason, RunRecord } from "@monde/core";
 import { harnessAdapters } from "@monde/adapters";
 import type { ServiceAuth } from "./auth.js";
 import { ArtifactRepository } from "./repositories/artifacts.js";
-import { CronScheduleRepository } from "./repositories/cron-schedules.js";
+import {
+  CronScheduleConflictError,
+  CronScheduleRepository
+} from "./repositories/cron-schedules.js";
 import {
   ExternalExecutionConflictError,
   ExternalExecutionRepository,
@@ -40,10 +44,15 @@ import { MonRepository, type MonRow, type MonUpsert } from "./repositories/mons.
 import { MondeRepository } from "./repositories/mondes.js";
 import { PlanRepository } from "./repositories/plans.js";
 import { RunEventRepository } from "./repositories/run-events.js";
+import type { RunAttemptRepository } from "./repositories/run-attempts.js";
 import { RunRepository } from "./repositories/runs.js";
 import type { MondeDatabase } from "./db.js";
 import { schemaVersion } from "./db.js";
 import { getPlatformPaths } from "./platform.js";
+import {
+  createExternalRun,
+  integrationContextPrompt
+} from "./external-runs.js";
 import type { RunEventBus } from "./run-events.js";
 import type { RunManager } from "./run-manager.js";
 import { ToolHandlers } from "./tools.js";
@@ -65,6 +74,7 @@ const MonPatchSchema = z
     harness_defaults: HarnessDefaultsSchema.optional(),
     allow_external_work_root: z.boolean().optional(),
     max_active_runs: z.number().int().min(1).max(32).optional(),
+    retry_policy: RunRetryPolicySchema.optional(),
     run_workspace: z
       .discriminatedUnion("mode", [
         z.object({ mode: z.literal("shared") }),
@@ -142,6 +152,7 @@ export interface RouteDeps {
   mons: MonRepository;
   plans: PlanRepository;
   runs: RunRepository;
+  runAttempts?: RunAttemptRepository;
   runEvents: RunEventRepository;
   eventBus: RunEventBus;
   runManager: RunManager;
@@ -184,6 +195,7 @@ function monDto(mon: MonRow): MonRow & {
   harness_defaults?: Record<string, { sandbox_mode?: string }>;
   allow_external_work_root?: boolean;
   max_active_runs?: number;
+  retry_policy?: MonConfig["retry_policy"];
   run_workspace?: MonConfig["run_workspace"];
   actor_context?: MonConfig["actor_context"];
   read_mounts?: MonConfig["read_mounts"];
@@ -206,6 +218,7 @@ function monDto(mon: MonRow): MonRow & {
     harness_defaults: config.harness_defaults,
     allow_external_work_root: config.allow_external_work_root,
     max_active_runs: config.max_active_runs,
+    retry_policy: config.retry_policy,
     run_workspace: config.run_workspace,
     actor_context: config.actor_context,
     read_mounts: config.read_mounts,
@@ -221,6 +234,7 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     mons,
     plans,
     runs,
+    runAttempts,
     runEvents,
     eventBus,
     runManager,
@@ -444,6 +458,139 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     }
   });
 
+  app.post(
+    "/mondes/:mondeId/integrations/:integrationId/schedules",
+    async (request, reply) => {
+      const params = z
+        .object({
+          mondeId: z.string().min(1),
+          integrationId: z.string().min(1).max(128)
+        })
+        .parse(request.params);
+      const body = z
+        .object({
+          schedule_key: z.string().min(1).max(400),
+          mon_id: z.string().min(1),
+          name: z.string().min(1).max(128),
+          expression: z.string().min(1).max(128),
+          timezone: z.string().min(1).max(128).default("UTC"),
+          title: z.string().min(1).max(512),
+          context_packet: RequiredJsonValueSchema,
+          harness_override: z.string().min(1).max(128).optional(),
+          sandbox_mode: z.string().min(1).max(128).optional(),
+          enabled: z.boolean().default(true)
+        })
+        .strict()
+        .parse(request.body);
+      if (
+        !mondes.get(params.mondeId) ||
+        !mons.get(params.mondeId, body.mon_id)
+      ) {
+        return reply.code(404).send({ error: "cron_target_not_found" });
+      }
+      try {
+        assertCanonicalSize(
+          body.context_packet,
+          64 * 1024,
+          "context_packet"
+        );
+        const requestDigest = canonicalSha256({
+          integration_id: params.integrationId,
+          external_schedule_key: body.schedule_key,
+          monde_id: params.mondeId,
+          mon_id: body.mon_id,
+          name: body.name,
+          expression: body.expression,
+          timezone: body.timezone,
+          title: body.title,
+          context_packet: body.context_packet,
+          ...(body.harness_override
+            ? { harness_override: body.harness_override }
+            : {}),
+          ...(body.sandbox_mode
+            ? { sandbox_mode: body.sandbox_mode }
+            : {}),
+          enabled: body.enabled
+        });
+        const result = cronSchedules.createIntegrationOrGet({
+          integrationId: params.integrationId,
+          externalScheduleKey: body.schedule_key,
+          requestDigest,
+          mondeId: params.mondeId,
+          monId: body.mon_id,
+          name: body.name,
+          expression: body.expression,
+          timezone: body.timezone,
+          title: body.title,
+          contextPacket: body.context_packet,
+          harnessOverride: body.harness_override,
+          sandboxMode: body.sandbox_mode,
+          enabled: body.enabled
+        });
+        return reply
+          .code(result.created ? 201 : 200)
+          .send({ schedule: result.schedule, created: result.created });
+      } catch (error) {
+        if (error instanceof CronScheduleConflictError) {
+          return reply
+            .code(409)
+            .send({ error: error.code, message: error.message });
+        }
+        return reply.code(422).send({
+          error: "invalid_integration_schedule",
+          message: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+  );
+
+  app.get(
+    "/mondes/:mondeId/integrations/:integrationId/schedules/:scheduleKey",
+    async (request, reply) => {
+      const params = z
+        .object({
+          mondeId: z.string().min(1),
+          integrationId: z.string().min(1).max(128),
+          scheduleKey: z.string().min(1).max(400)
+        })
+        .parse(request.params);
+      const schedule = cronSchedules.getByExternalKey(
+        params.integrationId,
+        params.scheduleKey
+      );
+      if (!schedule || schedule.monde_id !== params.mondeId) {
+        return reply
+          .code(404)
+          .send({ error: "integration_schedule_not_found" });
+      }
+      return { schedule };
+    }
+  );
+
+  app.delete(
+    "/mondes/:mondeId/integrations/:integrationId/schedules/:scheduleKey",
+    async (request, reply) => {
+      const params = z
+        .object({
+          mondeId: z.string().min(1),
+          integrationId: z.string().min(1).max(128),
+          scheduleKey: z.string().min(1).max(400)
+        })
+        .parse(request.params);
+      const schedule = cronSchedules.getByExternalKey(
+        params.integrationId,
+        params.scheduleKey
+      );
+      if (!schedule || schedule.monde_id !== params.mondeId) {
+        return reply
+          .code(404)
+          .send({ error: "integration_schedule_not_found" });
+      }
+      cronSchedules.delete(schedule.id);
+      return reply.code(204).send();
+    }
+  );
+
   app.get("/cron-schedules/:id", async (request, reply) => {
     const params = request.params as { id: string };
     const schedule = cronSchedules.get(params.id);
@@ -476,6 +623,16 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
       })
       .strict()
       .parse(request.body);
+    if (
+      current.integration_id &&
+      Object.keys(body).some((key) => key !== "enabled")
+    ) {
+      return reply.code(409).send({
+        error: "integration_schedule_immutable",
+        message:
+          "Integration-owned schedule definitions are immutable; archive and register a new schedule key."
+      });
+    }
     if (body.mon_id && !mons.get(current.monde_id, body.mon_id)) {
       return reply.code(404).send({ error: "cron_target_not_found" });
     }
@@ -707,6 +864,14 @@ export function registerRoutes(app: FastifyInstance, deps: RouteDeps): void {
     }
 
     return { run };
+  });
+
+  app.get("/runs/:id/attempts", async (request, reply) => {
+    const params = request.params as { id: string };
+    if (!runs.get(params.id)) {
+      return reply.code(404).send({ error: "run_not_found" });
+    }
+    return { attempts: runAttempts?.list(params.id) ?? [] };
   });
 
   app.get("/runs/:id/runtime-scope", async (request, reply) => {
@@ -1962,60 +2127,6 @@ function createOperatorRun(
   };
 }
 
-function createExternalRun(body: {
-  integrationId: string;
-  externalExecutionKey: string;
-  mondeId: string;
-  monId: string;
-  prompt: string;
-  completionPolicy: "process_exit" | "external_receipt";
-  contextPacketDigest?: string;
-  harnessOverride?: string;
-}): RunRecord {
-  const now = new Date().toISOString();
-  return {
-    id: `run_${nanoid(10)}`,
-    monde_id: body.mondeId,
-    mon_id: body.monId,
-    status: "queued",
-    process_status: "not_started",
-    outcome: "unknown",
-    interaction_mode: "one_shot",
-    runtime_state: "queued",
-    outcome_state: "unknown",
-    close_reason: null,
-    warnings: [],
-    origin: {
-      type: "system",
-      label: `external:${body.integrationId}:${body.externalExecutionKey}`
-    },
-    intent: {
-      title: `External execution ${body.externalExecutionKey}`,
-      prompt: body.prompt
-    },
-    execution: {
-      externally_managed: true,
-      integration_id: body.integrationId,
-      external_execution_key: body.externalExecutionKey,
-      completion_policy: body.completionPolicy,
-      ...(body.contextPacketDigest ? { context_packet_digest: body.contextPacketDigest } : {}),
-      ...(body.harnessOverride ? { harness_override: body.harnessOverride } : {})
-    },
-    result: {},
-    created_at: now,
-    updated_at: now
-  };
-}
-
-function integrationContextPrompt(contextPacket: unknown): string {
-  return [
-    "Execute this integration run using the configured MCP tools.",
-    "Monde forwards the following bounded context packet opaquely and does not interpret its fields.",
-    "",
-    canonicalJson(contextPacket)
-  ].join("\n");
-}
-
 function integrationRunSnapshot(
   execution: ExternalExecutionRecord,
   run: RunRecord
@@ -2033,6 +2144,15 @@ function integrationRunSnapshot(
     run_id: execution.run_id,
     execution_key: execution.external_execution_key,
     status,
+    ...(execution.process_attempt > 0
+      ? { process_attempt: execution.process_attempt }
+      : {}),
+    ...(execution.phase === "queued" && execution.condition
+      ? { retry_condition: execution.condition }
+      : {}),
+    ...(execution.retry_not_before
+      ? { next_attempt_at: execution.retry_not_before }
+      : {}),
     ...(run.started_at ? { started_at: run.started_at } : {}),
     ...(execution.phase === "terminal"
       ? {

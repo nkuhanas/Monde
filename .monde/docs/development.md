@@ -95,6 +95,20 @@ monde message frontend.mon "Review this package"
 Open the Vite URL, provide the service token, and use the operator console to
 inspect runs, mons, plans, artifacts, status, and review state.
 
+New Mons include the compatibility-safe retry default:
+
+```json
+{
+  "retry_policy": {
+    "max_attempts": 1
+  }
+}
+```
+
+Edit or PATCH the Mon configuration to opt into more attempts. Keep
+write-capable and externally side-effecting work at one attempt unless replay
+is known to be safe.
+
 ## Smoke Suites
 
 Focused security and backup regressions run with:
@@ -106,7 +120,8 @@ npm test
 The suite covers process-slot concurrency, isolated scope snapshots and
 cleanup, stable-key process-exit integration runs, optional receipt-gated
 external execution, process-group cancellation, external MCP grants and stdio
-containment, immutable manifests, cron coalescing/timezones, and backup
+containment, immutable manifests, restart-safe dispatch, generic process
+attempt retry, stable-key cron fires, cron coalescing/timezones, and backup
 rehearsal.
 
 The deterministic smoke gate builds once, does not invoke external agent

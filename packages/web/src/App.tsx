@@ -12,6 +12,7 @@ import type {
   MondeDto,
   PlanDto,
   PlanEvidenceDto,
+  RunAttemptDto,
   RunDto,
   RunEventDto
 } from "@monde/core";
@@ -52,6 +53,7 @@ type LogEvent = LogEventDto;
 type Artifact = ArtifactDto;
 type ArtifactDetail = ArtifactDetailDto;
 type PlanEvidence = PlanEvidenceDto;
+type RunAttempt = RunAttemptDto;
 type AdapterInfo = AdapterInfoDto;
 
 const storedTokenKey = "monde.serviceToken";
@@ -69,6 +71,7 @@ export function App() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [logs, setLogs] = useState<LogEvent[]>([]);
+  const [attempts, setAttempts] = useState<RunAttempt[]>([]);
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const [threads, setThreads] = useState<Run[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -112,6 +115,10 @@ export function App() {
     [mondes, selectedMondeId]
   );
   const selectedRun = useMemo(() => runs.find((run) => run.id === selectedRunId) ?? runs[0], [runs, selectedRunId]);
+  const selectedRetryNotBefore =
+    typeof selectedRun?.execution?.retry_not_before === "string"
+      ? selectedRun.execution.retry_not_before
+      : undefined;
   const expandedThreads = useMemo(
     () => threads.filter((thread) => expandedThreadIds.includes(thread.id)),
     [expandedThreadIds, threads]
@@ -205,6 +212,7 @@ export function App() {
     if (!selectedRun || !token) {
       setEvents([]);
       setLogs([]);
+      setAttempts([]);
       setArtifacts([]);
       setScope(null);
       return;
@@ -220,6 +228,10 @@ export function App() {
         "run_input",
         "run_output",
         "run_error_output",
+        "run_attempt_started",
+        "run_attempt_timeout",
+        "run_attempt_failed",
+        "run_retry_scheduled",
         "warning_added",
         "run_process_exit",
         "run_finished"
@@ -230,10 +242,35 @@ export function App() {
         source.close();
         void refreshAll();
       });
+      source.addEventListener("run_attempt_failed", () => {
+        void refreshRunSurfaces(selectedRun.id);
+      });
+      source.addEventListener("run_retry_scheduled", () => {
+        void refreshAll();
+      });
       source.onerror = () => source.close();
       return () => source.close();
     }
   }, [selectedRun?.id, selectedRun?.status, token]);
+
+  useEffect(() => {
+    if (
+      !token ||
+      !selectedRun ||
+      selectedRun.status !== "queued" ||
+      !selectedRetryNotBefore
+    ) {
+      return;
+    }
+    const pollRetry = () => {
+      void Promise.all([
+        refreshAll(),
+        refreshRunSurfaces(selectedRun.id)
+      ]);
+    };
+    const interval = window.setInterval(pollRetry, 1500);
+    return () => window.clearInterval(interval);
+  }, [selectedRun?.id, selectedRun?.status, selectedRetryNotBefore, token]);
 
   useEffect(() => {
     setReviewSummary(typeof selectedRun?.result?.summary === "string" ? selectedRun.result.summary : "");
@@ -349,14 +386,16 @@ export function App() {
   }
 
   async function refreshRunSurfaces(runId: string) {
-    const [history, logResponse, artifactResponse, scopeResponse] = await Promise.all([
+    const [history, logResponse, attemptResponse, artifactResponse, scopeResponse] = await Promise.all([
       authFetch<{ events: RunEvent[] }>(`/api/runs/${runId}/events/history`),
       authFetch<{ logs: LogEvent[] }>(`/api/logs?run_id=${encodeURIComponent(runId)}`),
+      authFetch<{ attempts: RunAttempt[] }>(`/api/runs/${runId}/attempts`),
       authFetch<{ artifacts: Artifact[] }>(`/api/artifacts?run_id=${encodeURIComponent(runId)}`),
       authFetch<Record<string, unknown>>(`/api/runs/${runId}/runtime-scope`).catch(() => null)
     ]);
     setEvents(history.events);
     setLogs(logResponse.logs);
+    setAttempts(attemptResponse.attempts);
     setArtifacts(artifactResponse.artifacts);
     setScope(scopeResponse);
     const detailEntries = await Promise.all(
@@ -966,7 +1005,7 @@ export function App() {
               selectedRun={selectedRun}
               onSelectRun={(run) => setSelectedRunId(run.id)}
               detailProps={{
-                events, logs, artifacts, artifactDetails, scope, input, setInput,
+                events, logs, attempts, artifacts, artifactDetails, scope, input, setInput,
                 onSubmitInput: sendInput,
                 onStart: () => { if (selectedRun) void startRun(selectedRun); },
                 onStop: () => { if (selectedRun) void stopRun(selectedRun); },
@@ -1050,7 +1089,7 @@ export function App() {
             <ReviewWorkspace
               run={selectedRun}
               detailProps={{
-                events, logs, artifacts, artifactDetails, scope, input, setInput,
+                events, logs, attempts, artifacts, artifactDetails, scope, input, setInput,
                 onSubmitInput: sendInput,
                 onStart: () => { if (selectedRun) void startRun(selectedRun); },
                 onStop: () => { if (selectedRun) void stopRun(selectedRun); },

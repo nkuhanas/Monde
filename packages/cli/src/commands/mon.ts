@@ -40,6 +40,21 @@ export function createMon(directoryName: string, options: MonCreateOptions): voi
     default_model: options.model ?? null,
     work_root: "..",
     max_active_runs: 1,
+    retry_policy: {
+      max_attempts: 1,
+      initial_backoff_seconds: 5,
+      backoff_multiplier: 2,
+      max_backoff_seconds: 300,
+      kill_grace_seconds: 5,
+      retryable_conditions: [
+        "launch_error",
+        "process_exit_nonzero",
+        "process_interrupted",
+        "required_mcp_unavailable",
+        "attempt_timeout",
+        "credential_expired"
+      ]
+    },
     run_workspace: { mode: "shared" },
     actor_context: [],
     read_mounts: [],

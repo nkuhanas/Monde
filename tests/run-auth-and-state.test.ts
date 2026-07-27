@@ -44,6 +44,7 @@ function managerFor(getRun: () => RunRecord | undefined): RunManager {
 
 test("one-shot run tokens are rejected after completion and for invalid tokens", () => {
   const token = createRunToken();
+  assert.match(token, /^run_[A-Za-z0-9_-]+$/);
   let run = runRecord({ execution: { run_token_hash: hashRunToken(token) } });
   const manager = managerFor(() => run);
 

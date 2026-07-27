@@ -50,6 +50,7 @@ Runs:
 - active, queued, warning-bearing, and reviewable runs
 - lifecycle/process/outcome fields
 - stable-key integration identity and generic operational evidence
+- process-attempt history, retry conditions, and scheduled retry time
 - runtime state for HITL threads
 - runner, harness, input mode, and write metadata
 
@@ -72,8 +73,10 @@ Cron:
 - enable/disable and archive controls
 - coalesced fire and generated-run history
 
-Cron creates ordinary runs. It does not represent TeaParty workflows, retries,
-or machine/model routing.
+Cron creates one-shot logical runs, including stable-key integration runs when
+registered through an integration. Fired runs use their Mon's generic
+process-attempt retry policy. Cron does not represent TeaParty workflows,
+caller-domain retry, or machine/model routing.
 
 Artifacts:
 
@@ -193,6 +196,11 @@ Evidence uses structured artifact rows and typed log entries. Primary log
 messages are readable without parsing JSON; secondary payload fields remain
 available in an expandable details section. Empty result objects render as an
 explanation rather than `{}`.
+
+Process attempts are a separate evidence collection. Each row shows the
+attempt number, state, condition, start time, exit code/signal, error, and retry
+time when present. A queued retry shows an amber scheduled-time badge and does
+not expose the manual Start action.
 
 ## Write Evidence
 

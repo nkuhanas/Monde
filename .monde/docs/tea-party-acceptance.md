@@ -16,6 +16,11 @@ are not part of this gate.
 | 8 | A changed context packet under the same key conflicts | server-computed canonical request digest | `tests/integration-run.test.ts` |
 | 9 | Lost start response is recoverable by execution key | persistent lookup route and ledger | `tests/integration-run.test.ts`, `tests/external-execution.test.ts` |
 | 10 | Existing Mons retain one-slot/shared behavior | schema defaults and workspace invariant | `tests/run-isolation.test.ts`, `.monde/docs/compatibility.md` |
+| 11 | Persisted queued work resumes after service startup without relaunching uncertain active work | restart reconciliation followed by oldest-runnable dispatch | `tests/integration-run.test.ts`, `tests/run-dispatch.test.ts` |
+| 12 | A retryable operational failure keeps one run and execution key across durable process attempts | Mon retry policy, `run_attempts`, persisted backoff | `tests/integration-run.test.ts` |
+| 13 | Cancellation during retry backoff prevents another launch | persistent cancellation plus retry-wake removal | `tests/integration-run.test.ts` |
+| 14 | Stable-key schedule registration and fires are idempotent | integration schedule ledger and deterministic per-fire execution key | `tests/integration-run.test.ts`, `tests/cron-schedule.test.ts` |
+| 15 | An active external MCP grant remains usable without surviving termination or backoff | active-only grant renewal and per-attempt revocation | `tests/integration-run.test.ts`, `tests/codex-external-mcp.test.ts` |
 
 ## TeaParty-Owned Acceptance
 
@@ -31,6 +36,10 @@ Monde snapshot remains succeeded
 The Monde API makes the states independent and performs no callback into
 TeaParty. The QueueItem transition and its regression belong in the TeaParty
 repository.
+
+Likewise, Monde's process-attempt retry is generic operational recovery inside
+one logical Monde run. TeaParty still owns validation of materialized effects
+and any domain retry decision after Monde reaches a terminal result.
 
 ## Release Gate
 

@@ -44,8 +44,10 @@ Servers may be required or optional and have bounded startup timeouts.
 ## External Run Claims
 
 External servers may use `auth.type = run_claims`. Monde issues a separate
-random grant for each server and stores only its hash. The grant is not the
-local service token and is valid only while the run is starting or active.
+random grant for each server and process attempt and stores only its hash. The
+grant is not the local service token and is valid only while the run is
+starting or active. Its short expiry is renewed on successful introspection
+while the run remains active; retry backoff and terminal states revoke it.
 
 The server calls:
 
@@ -72,6 +74,11 @@ the configured integration ID and execution key; `external_scope` is null on
 the narrow process-exit endpoint. The bounded opaque context packet is
 persisted and prompt-forwarded separately. Monde does not parse it into queue,
 lease, persona, pipeline, artifact, or lineage claims.
+
+For an integration-owned cron fire, the deterministic per-fire execution key
+is carried in the same claims and the opaque scheduled context packet is
+carried as `external_scope`. This supplies run-scoped activation context
+without introducing scheduler-domain schemas into Monde.
 
 Authenticated streamable-HTTP servers must use a loopback URL in v1 so they
 can reach the local introspection endpoint. An external stdio server receives

@@ -3,10 +3,12 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { migrateDatabase } from "../packages/service/src/db.ts";
 import {
+  CronScheduleConflictError,
   CronScheduleRepository,
   nextCronFire,
   validateCronSchedule
 } from "../packages/service/src/repositories/cron-schedules.ts";
+import { ExternalExecutionRepository } from "../packages/service/src/repositories/external-executions.ts";
 
 function fixture(t: test.TestContext) {
   const db = new DatabaseSync(":memory:");
@@ -188,5 +190,64 @@ test("disabled and archived schedules do not fire, while archived history remain
     (db.prepare("SELECT COUNT(*) AS count FROM runs").get() as { count: number })
       .count,
     1
+  );
+});
+
+test("integration schedules are idempotent and create stable process-exit executions per fire", (t) => {
+  const { db, schedules } = fixture(t);
+  const contextPacket = {
+    schema: { id: "example.scheduled-context", version: "1" },
+    scheduleKey: "persona-review",
+    scope: { kind: "persona", personaId: "persona-1" },
+    objective: "Review this persona."
+  };
+  const input = {
+    integrationId: "example",
+    externalScheduleKey: "persona-review",
+    requestDigest: "a".repeat(64),
+    mondeId: "m",
+    monId: "seia",
+    name: "Persona review",
+    expression: "* * * * *",
+    timezone: "UTC",
+    title: "Review persona",
+    contextPacket,
+    now: "2026-01-01T00:00:00.000Z"
+  };
+
+  const first = schedules.createIntegrationOrGet(input);
+  const replay = schedules.createIntegrationOrGet(input);
+  assert.equal(first.created, true);
+  assert.equal(replay.created, false);
+  assert.equal(replay.schedule.id, first.schedule.id);
+  assert.throws(
+    () =>
+      schedules.createIntegrationOrGet({
+        ...input,
+        requestDigest: "b".repeat(64)
+      }),
+    CronScheduleConflictError
+  );
+
+  const [tick] = schedules.tick("2026-01-01T00:01:00.000Z");
+  assert.ok(tick.external_execution);
+  assert.equal(
+    tick.fire.external_execution_key,
+    "persona-review:2026-01-01T00:01:00.000Z"
+  );
+  assert.equal(tick.external_execution.completion_policy, "process_exit");
+  assert.equal(tick.external_execution.run_id, tick.run.id);
+  assert.deepEqual(tick.external_execution.external_context, contextPacket);
+  assert.deepEqual(tick.external_execution.external_scope, contextPacket);
+  assert.equal(tick.run.execution.externally_managed, true);
+  assert.equal(tick.run.origin.type, "cron");
+
+  const executions = new ExternalExecutionRepository(db);
+  assert.equal(
+    executions.getByKey(
+      "example",
+      "persona-review:2026-01-01T00:01:00.000Z"
+    )?.run_id,
+    tick.run.id
   );
 });

@@ -24,7 +24,24 @@ export class ProcessSlotRepository {
       const existing = this.db.prepare("SELECT run_id FROM process_slots WHERE run_id = ?").get(input.runId) as
         | { run_id: string }
         | undefined;
-      const activeRunIds = this.listForMon(input.mondeId, input.monId).map((slot) => slot.run_id);
+      const slotRunIds = this.listForMon(input.mondeId, input.monId).map(
+        (slot) => slot.run_id
+      );
+      const persistedProcessRunIds = (
+        this.db
+          .prepare(
+            `SELECT id
+             FROM runs
+             WHERE monde_id = ? AND mon_id = ?
+               AND status IN ('starting', 'active')
+               AND interaction_mode != 'hitl_thread'
+             ORDER BY started_at ASC, created_at ASC, id ASC`
+          )
+          .all(input.mondeId, input.monId) as Array<{ id: string }>
+      ).map((run) => run.id);
+      const activeRunIds = [
+        ...new Set([...slotRunIds, ...persistedProcessRunIds])
+      ];
       if (existing) {
         this.db.exec("COMMIT");
         return { reserved: true, activeRunIds };

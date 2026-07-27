@@ -49,6 +49,16 @@ Web UI:
 
 The plan itself does not execute. Runs are the execution/provenance records.
 
+A plan assignment links to one logical run even when that run has multiple
+process attempts. During retry backoff the run and assignment return to
+`queued`; another run ID is not generated. The eventual terminal run result
+drives the assignment status, while `GET /runs/:id/attempts` and the Review
+evidence tab retain the intermediate attempt failures.
+
+Plan-level follow-up or retry remains a coordination decision. Mon-level
+process retry handles only configured operational failures inside the existing
+logical assignment run.
+
 Parley-to-Monde translation:
 
 ```text

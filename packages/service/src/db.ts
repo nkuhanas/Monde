@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { ensureDirectory, getPlatformPaths } from "./platform.js";
 
-export const schemaVersion = 13;
+export const schemaVersion = 14;
 
 export interface MondeDatabase {
   db: DatabaseSync;
@@ -446,20 +446,93 @@ export function migrateDatabase(db: DatabaseSync): void {
       `);
     }
 
-    if (current < 13) {
+    db.exec(`
+      UPDATE runs
+         SET outcome = 'completed',
+             outcome_state = 'succeeded'
+       WHERE interaction_mode = 'hitl_thread'
+         AND status = 'finished'
+         AND process_status = 'exited'
+         AND runtime_state = 'closed'
+         AND close_reason = 'user_closed_widget'
+         AND outcome = 'unknown'
+         AND outcome_state = 'unknown'
+         AND COALESCE(json_extract(execution_json, '$.chat_last_error'), '') = ''
+         AND COALESCE(json_extract(execution_json, '$.hitl_timeout_reason'), '') = '';
+    `);
+
+    if (current < 14) {
       db.exec(`
-        UPDATE runs
-           SET outcome = 'completed',
-               outcome_state = 'succeeded'
-         WHERE interaction_mode = 'hitl_thread'
-           AND status = 'finished'
-           AND process_status = 'exited'
-           AND runtime_state = 'closed'
-           AND close_reason = 'user_closed_widget'
-           AND outcome = 'unknown'
-           AND outcome_state = 'unknown'
-           AND COALESCE(json_extract(execution_json, '$.chat_last_error'), '') = ''
-           AND COALESCE(json_extract(execution_json, '$.hitl_timeout_reason'), '') = '';
+        ALTER TABLE external_executions
+          ADD COLUMN process_attempt INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE external_executions
+          ADD COLUMN retry_not_before TEXT;
+
+        CREATE TABLE run_attempts (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+          attempt_number INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          condition TEXT,
+          pid INTEGER,
+          exit_code INTEGER,
+          exit_signal TEXT,
+          error TEXT,
+          retry_at TEXT,
+          started_at TEXT NOT NULL,
+          spawned_at TEXT,
+          ended_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(run_id, attempt_number)
+        );
+
+        CREATE INDEX run_attempts_run_idx
+          ON run_attempts(run_id, attempt_number);
+        CREATE INDEX run_attempts_retry_idx
+          ON run_attempts(status, retry_at);
+
+        DROP INDEX IF EXISTS external_mcp_grants_run_idx;
+        ALTER TABLE external_mcp_grants RENAME TO external_mcp_grants_v13;
+
+        CREATE TABLE external_mcp_grants (
+          id TEXT PRIMARY KEY,
+          external_execution_id TEXT REFERENCES external_executions(id) ON DELETE CASCADE,
+          run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+          server_id TEXT NOT NULL,
+          attempt_number INTEGER NOT NULL DEFAULT 1,
+          audience TEXT NOT NULL,
+          token_hash TEXT NOT NULL,
+          claims_json TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          revoked_at TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(run_id, server_id, attempt_number)
+        );
+
+        INSERT INTO external_mcp_grants (
+          id, external_execution_id, run_id, server_id, attempt_number, audience,
+          token_hash, claims_json, expires_at, revoked_at, created_at
+        )
+        SELECT
+          id, external_execution_id, run_id, server_id, 1, audience,
+          token_hash, claims_json, expires_at, revoked_at, created_at
+        FROM external_mcp_grants_v13;
+
+        DROP TABLE external_mcp_grants_v13;
+
+        CREATE INDEX external_mcp_grants_run_idx
+          ON external_mcp_grants(run_id, revoked_at);
+
+        ALTER TABLE cron_schedules ADD COLUMN integration_id TEXT;
+        ALTER TABLE cron_schedules ADD COLUMN external_schedule_key TEXT;
+        ALTER TABLE cron_schedules ADD COLUMN request_digest TEXT;
+        ALTER TABLE cron_schedules ADD COLUMN context_packet_json TEXT;
+        ALTER TABLE cron_fires ADD COLUMN external_execution_key TEXT;
+
+        CREATE UNIQUE INDEX cron_schedules_external_key_idx
+          ON cron_schedules(integration_id, external_schedule_key)
+          WHERE integration_id IS NOT NULL AND external_schedule_key IS NOT NULL;
       `);
     }
 

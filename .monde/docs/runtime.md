@@ -127,7 +127,7 @@ The web backend and Vite UI use strict local-origin CORS.
 Operational state is stored in the platform Monde data directory using
 Node's built-in SQLite binding.
 
-The DB is currently schema version 13 and has ordered forward migrations.
+The DB is currently schema version 14 and has ordered forward migrations.
 Startup fails clearly if the DB schema is newer than the service schema.
 
 The service currently uses WAL and foreign keys:
@@ -167,8 +167,15 @@ handles. It releases orphaned process-slot reservations, records external
 process or cancellation loss where applicable, seals run scopes, and revokes
 run-scoped grants.
 
-Queued and blocked runs remain persisted. They do not auto-start on service
-restart.
+Queued runs remain persisted and resume through the process-slot dispatcher
+after the API and MCP listeners are available. A persisted retry whose
+`retry_not_before` time is still in the future receives a new local wake timer.
+Blocked runs remain blocked.
+
+Previously starting or active processes are never silently relaunched after a
+restart: the new service cannot prove whether the old process produced an
+effect. They are marked lost/interrupted and remain terminal. Retry applies
+only to failures observed while the current service owns the process handle.
 
 ## Scope And Stale Scope
 
@@ -229,6 +236,47 @@ available slots after a process exits or queued work is cancelled.
 HITL adapter turns reserve process capacity only while their process turn is
 actually active. An open thread does not permanently occupy a process slot.
 
+## Process Attempts And Retry
+
+A logical run can contain multiple durable process attempts. Retry preserves
+the run ID, stable external execution key, origin, context packet, scope
+snapshot, and scratch workspace. Each attempt receives a new process, run
+token, and set of external MCP grants.
+
+Existing Mons default to:
+
+```json
+{
+  "retry_policy": {
+    "max_attempts": 1
+  }
+}
+```
+
+Opt-in policies configure maximum attempts, exponential capped backoff,
+optional per-attempt timeout and kill grace, and an allowlist of retryable
+operational conditions. Supported conditions are launch failure, non-zero
+exit, process interruption, required MCP unavailability, attempt timeout,
+credential expiry, and an explicitly enabled observed harness no-op.
+`harness_noop` is excluded by default because a quiet process may still have
+performed useful external work.
+
+While waiting for backoff, the logical run is queued/pending and consumes no
+process slot. Cancellation clears the wake and terminally cancels the same
+logical run. A later attempt can succeed the logical run; only exhausted or
+non-retryable failure becomes the run's terminal failed outcome.
+
+The attempt ledger is available through:
+
+```text
+GET /runs/:id/attempts
+```
+
+Retry is generic operational execution policy. It does not validate the
+claimed result, create a new TeaParty QueueItem attempt, or change the caller's
+domain outcome. Lost-process startup reconciliation is deliberately not
+retryable because duplicate execution would be uncertain.
+
 ## Stable-Key Integration Runs
 
 The narrow integration surface provides idempotent process execution without
@@ -255,15 +303,23 @@ integrations that intentionally select receipt-gated completion, external
 lineage metadata, or Monde execution manifests. Those optional capabilities
 are not prerequisites for the stable-key process-exit path.
 
+Stable-key inspection may also expose `process_attempt`, `retry_condition`, and
+`next_attempt_at`. These describe Monde's operational attempts within the same
+logical execution key.
+
 ## Cron Scheduler
 
 Generic cron is a Monde capability. Five-field expressions are evaluated in
-the configured IANA timezone, including DST behavior. A fire creates an
-ordinary `origin.type = cron` run and uses the same dispatcher and Mon limits.
+the configured IANA timezone, including DST behavior. A legacy fire creates an
+ordinary `origin.type = cron` run. An integration-owned schedule instead
+creates a process-exit external execution with a deterministic execution key
+derived from the schedule key and scheduled fire time. Both use the same
+dispatcher, Mon limits, and configured Mon retry policy.
 
 Missed fires coalesce to the latest due time, and a schedule has at most one
-queued, starting, or active run. Cron does not implement workflows, retry
-policy, or model/machine routing.
+queued, starting, or active logical run. Schedule registration and each
+integration fire are idempotent. Cron does not implement workflows or
+model/machine routing.
 
 ## Runtime Events
 
@@ -272,9 +328,14 @@ lifecycle, and HITL messages. Representative event names are:
 
 ```text
 run_started
+run_attempt_started
 run_input
 run_output
 run_error_output
+run_attempt_timeout
+run_attempt_failed
+run_retry_scheduled
+run_dispatch_deferred
 warning_added
 run_process_exit
 run_finished

@@ -74,17 +74,52 @@ export class RunRepository {
     return this.listActiveForMon(mondeId, monId)[0];
   }
 
-  getOldestQueuedForMon(mondeId: string, monId: string): RunRecord | undefined {
+  getOldestQueuedForMon(
+    mondeId: string,
+    monId: string,
+    runnableAt = new Date().toISOString()
+  ): RunRecord | undefined {
     const row = this.db
       .prepare(
         `SELECT * FROM runs
          WHERE monde_id = ? AND mon_id = ? AND status = 'queued'
+           AND COALESCE((
+             SELECT retry_at
+             FROM run_attempts
+             WHERE run_attempts.run_id = runs.id
+             ORDER BY attempt_number DESC
+             LIMIT 1
+           ), '') <= ?
          ORDER BY created_at ASC
          LIMIT 1`
       )
-      .get(mondeId, monId) as RunRow | undefined;
+      .get(mondeId, monId, runnableAt) as RunRow | undefined;
 
     return row ? this.fromRow(row) : undefined;
+  }
+
+  listQueued(): RunRecord[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM runs
+         WHERE status = 'queued' AND interaction_mode != 'hitl_thread'
+         ORDER BY created_at ASC, id ASC`
+      )
+      .all() as RunRow[];
+    return rows.map((row) => this.fromRow(row));
+  }
+
+  nextRetryAt(runId: string): string | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT retry_at
+         FROM run_attempts
+         WHERE run_id = ?
+         ORDER BY attempt_number DESC
+         LIMIT 1`
+      )
+      .get(runId) as { retry_at: string | null } | undefined;
+    return row?.retry_at ?? undefined;
   }
 
   insert(run: RunRecord): void {
