@@ -1,10 +1,13 @@
 # Security Model
 
-Monde is a single-user, local operator runtime. Its supported deployment is a
-trusted desktop or development account with the web/API and MCP listeners bound
-to loopback. Local-only protects the service from network exposure; it does not
-make an untrusted harness safe and it does not isolate processes running as the
-same operating-system user.
+Monde is local-first by trust model, not merely by installation convenience.
+Its current supported deployment is a single operator on a trusted desktop or
+development account, with the web/API and MCP listeners bound to loopback.
+
+Local-only protects the service from network exposure; it does not make an
+untrusted harness safe and it does not isolate processes running as the same
+operating-system user. Future remote-machine support must add authenticated
+deployment and machine identity rather than weakening this boundary.
 
 ## Supported Trust Boundary
 

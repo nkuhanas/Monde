@@ -3,6 +3,10 @@
 Plan, cron, external integration, operator, and system intent sources create
 runs.
 
+A logical run is Monde's durable unit of accountability. It answers who acted,
+why, under what scope, through which process attempts, and with what observable
+evidence.
+
 Runs produce typed logs, raw output events, path-referenced artifacts, and
 result summaries or review notes. For ordinary review-governed runs, a clean
 process exit does not automatically mean the operator has accepted the

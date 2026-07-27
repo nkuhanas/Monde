@@ -1,7 +1,8 @@
 # Plans
 
-Plans are server-owned coordination contracts. They do not execute directly.
-Activation creates queued runs from assignments.
+Plans are server-owned coordination contracts, not a general workflow engine.
+They express declared intent and responsibility, then create accountable runs
+from assignments. Plans do not execute directly.
 
 Short form:
 

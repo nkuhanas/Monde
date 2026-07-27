@@ -1,7 +1,12 @@
 # Harnesses
 
-Harnesses are adapters that turn a run into a concrete local process or CLI
-invocation. They receive resolved runtime scope and run-scoped MCP credentials.
+Harnesses are replaceable execution adapters. They turn a Mon's logical run
+into a concrete local process or CLI invocation without becoming the Mon's
+identity or the source of run history.
+
+They receive resolved runtime scope and run-scoped MCP credentials. Switching
+harnesses should not require inventing a new actor or abandoning Monde's
+evidence model.
 
 ## Common Environment
 

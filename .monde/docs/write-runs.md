@@ -1,5 +1,9 @@
 # Write Runs
 
+Write access is an explicit run capability, not an assumed property of a Mon
+or harness. Monde grants it for a bounded execution scope and records the
+resulting change evidence.
+
 Codex write-capable runs are explicit. Codex defaults to read-only; use
 `--write` or `--sandbox workspace-write` when the operator intends bounded
 writes.

@@ -1,7 +1,12 @@
 # Monde Runtime
 
-Monde is a local operator runtime centered on runs. A run captures intent,
-provenance, execution state, logs, artifacts, and result/review data.
+Monde is a local-first execution control plane for persistent project agents.
+The Mon is the durable actor; the logical run is the unit of accountability;
+process attempts are replaceable execution mechanics underneath it.
+
+A run captures intent, provenance, scope, lifecycle, attempts, output, logs,
+artifacts, and result/review data. This separation lets Monde operate a process
+without claiming ownership of an integration's workflow or semantic success.
 
 Filesystem identity is portable through `.monde/` and `*.mon` directories.
 Operational state is local and service-owned in SQLite.
@@ -31,8 +36,9 @@ Auth:              local service token plus run-scoped MCP tokens
 ```
 
 The runtime favors shared TypeScript DTOs across service, CLI, MCP, and web UI.
-The hard problems are orchestration, state, adapters, local auth, and operator
-UX, not raw throughput.
+The hard problems are trustworthy lifecycle, bounded execution, durable
+evidence, adapter containment, local auth, and operator legibility—not raw
+throughput or model routing.
 
 ## Local Service
 

@@ -3,11 +3,11 @@
 </p>
 
 <p align="center">
-  <strong>A local operator console for AI agents working inside real project directories.</strong>
+  <strong>The local-first control plane for persistent project agents.</strong>
 </p>
 
 <p align="center">
-  Monde makes agent work visible, scoped, reviewable, and recoverable through a local web console, CLI, MCP service, and run evidence model.
+  Monde gives named agents durable identity, bounded execution, operational memory, and a human-readable evidence trail across real project work.
 </p>
 
 <p align="center">
@@ -21,6 +21,8 @@
   <a href="#why-monde-exists">Why Monde exists</a>
   ·
   <a href="#what-monde-is">What Monde is</a>
+  ·
+  <a href="#product-stance">Product stance</a>
   ·
   <a href="#see-it">See it</a>
   ·
@@ -38,7 +40,7 @@
 </p>
 
 <p align="center">
-  <em>The local command center where agents, runs, plans, artifacts, and review all stay visible.</em>
+  <em>One local command center for who is acting, what is running, what changed, and what still needs judgment.</em>
 </p>
 
 ## Why Monde exists
@@ -49,20 +51,31 @@ chat history, local files, and ad hoc prompts, it becomes hard to answer the
 operator questions that matter:
 
 - What is running right now?
-- Which mon is responsible for this work?
+- Which persistent actor is responsible for this work?
 - What scope and write permissions did it have?
-- What did it output, change, or register as evidence?
+- Did it actually execute, retry, or fail—and what evidence proves that?
+- What did it output, change, or register?
 - Which runs still need human review?
-- Can I keep chatting with the mon without losing the operational record?
+- Can I continue the conversation without losing the operational record?
 
-Monde exists to make local agent work visible and reviewable. It gives agents
-bounded runtime scope, gives humans an operator console, and turns process
-output, logs, artifacts, plans, and chat turns into durable local state.
+Monde exists because agent work should not disappear into chat history or be
+trusted from narration alone. It gives agents bounded runtime scope, gives
+humans an operator console, and turns process attempts, output, logs, artifacts,
+plans, schedules, and conversations into durable local operational state.
 
 ## What Monde is
 
-Monde is a local-first runtime and operator console for scoped AI agents inside
-project directories.
+Monde is a local-first execution runtime and operator console for persistent,
+scoped AI agents inside real project directories.
+
+A **Monde** is a local project or world boundary: the place where Mons, runs,
+plans, schedules, and operational evidence live.
+
+A **Mon** is a durable project actor: identity, role, context, harness defaults,
+permissions, and work-root policy. A **run** is the unit of execution and
+accountability: intent, scope, attempts, output, evidence, lifecycle, and
+review. Harnesses such as Codex are replaceable execution providers; the Mon
+and its history remain stable.
 
 ```text
 Human operator
@@ -71,7 +84,7 @@ Human operator
 Monde web console / CLI
   |
   v
-Local service: runs, MCP, SQLite, artifacts, logs
+Local control plane: identity, dispatch, MCP, SQLite, evidence
   |
   v
 Mons + harnesses: basic-process, Codex, opencode
@@ -84,18 +97,45 @@ The runtime centers on runs:
 
 ```text
 Plan / Cron / External / Operator / System
-        -> Run
-        -> Logs + Artifacts + Result + Review
+        -> logical Run
+        -> Process Attempts
+        -> Output + Logs + Artifacts + Result + Review
 ```
 
 Filesystem identity is portable through `.monde/` and `*.mon` directories.
 Operational state is local and service-owned in SQLite.
 
+## Product stance
+
+Monde is deliberately opinionated about where trust belongs:
+
+- **Persistent actors, not anonymous sessions.** A Mon should be recognizable
+  across runs, harness changes, restarts, and eventually machines.
+- **Evidence, not self-report.** Process state, attempts, output, changes,
+  artifacts, warnings, and review remain inspectable independently of what an
+  agent says it accomplished.
+- **Execution lifecycle, not domain ownership.** Monde owns generic dispatch,
+  concurrency, retry, cancellation, cron, isolation, and operational evidence.
+  Integrations own their workflows, business state, semantic validation, and
+  artifact admission.
+- **Local-first as a trust model.** The current service is single-operator and
+  loopback-bound, with project files and operational state kept on the
+  operator's machine. Remote and multi-machine operation must arrive through
+  explicit deployment identity and authenticated inventory—not UI fiction.
+- **Human legibility is a runtime feature.** The web console is not a decorative
+  dashboard over a black box; it is where execution state, evidence, and human
+  judgment meet.
+
+Monde is not trying to be a model router, a hosted multi-tenant agent platform,
+a domain workflow engine, or a replacement for an integration's source of
+truth. It is the execution and evidence layer beneath those decisions.
+
 ## See it
 
-The UI is the main product surface. The dashboard above is the first signal:
-current status, navigation sectors, machine/Monde context, high-level activity,
-and chat access in one local console.
+The UI is the main product surface. It should answer the operational questions
+before requiring raw logs: where the operator is, which actor is working, what
+state the run is in, whether it retried, what evidence exists, and whether a
+human decision remains.
 
 ### Mon threads and chat rail
 
@@ -110,10 +150,10 @@ and chat access in one local console.
   </tr>
 </table>
 
-Human-in-the-loop mon threads keep chat grounded in run records. Draft chats
-become server-backed `hitl_thread` runs on first send. Failures, typing states,
-timestamps, harness chips, and write/read mode stay visible while the operator
-keeps working elsewhere in the console.
+Human-in-the-loop Mon threads keep conversation grounded in run records. Draft
+chats become server-backed `hitl_thread` runs on first send. Failures, typing
+states, timestamps, harness chips, and write/read mode stay visible while the
+operator keeps working elsewhere in the console.
 
 ### Mons and permissions
 
@@ -121,9 +161,9 @@ keeps working elsewhere in the console.
   <img src="./docs/assets/mons_overview.png" alt="Monde mons overview" width="820" />
 </p>
 
-Mons are local actor identities. The Mons tab keeps harness defaults,
-permissions, work roots, queues, chat entry points, and management actions in
-one place.
+Mons are persistent local actor identities rather than disposable chat
+sessions. The Mons tab keeps harness defaults, permissions, work roots, queues,
+chat entry points, and management actions in one place.
 
 ### Runs and review
 
@@ -131,8 +171,9 @@ one place.
   <img src="./docs/assets/runs_overview_hero.png" alt="Monde runs and review" width="920" />
 </p>
 
-The Runs and Review surfaces expose process state, terminal output, logs,
-artifacts, scope, warnings, write evidence, and explicit operator review.
+The Runs and Review surfaces expose logical-run state, process attempts,
+terminal output, logs, artifacts, scope, warnings, write evidence, and explicit
+operator review.
 
 ## Quick start
 
@@ -161,11 +202,11 @@ Read the token from the reported token path and paste it into the UI.
 
 | Surface | Purpose |
 |---|---|
-| Overview | Visual home for the selected Monde, status, sectors, and activity |
-| Mons | Local agent identities, harness defaults, permissions, work roots, and chat entry points |
-| Chat rail | Human-in-the-loop mon conversations backed by run records |
-| Runs | Process lifecycle, terminal output, queue state, and review entry points |
-| Review | Logs, artifacts, runtime scope, write evidence, result notes, and semantic outcome |
+| Overview | Operational home for the selected Monde, current machine, attention, and activity |
+| Mons | Persistent project actors, harness defaults, permissions, work roots, and chat entry points |
+| Chat rail | Human-in-the-loop Mon conversations backed by run records |
+| Runs | Logical execution lifecycle, process attempts, terminal output, queue state, and retry |
+| Review | Evidence, runtime scope, write changes, result notes, and human judgment |
 | Plans | Coordination contracts that generate queued runs from assignments |
 | Cron | Generic timezone-aware schedules for ordinary or stable-key integration runs |
 | Artifacts | Path-referenced evidence with bounded previews and path status |
@@ -196,8 +237,8 @@ Auth:              local service token plus run-scoped MCP tokens
 ```
 
 One-shot runs are process-bounded work. HITL threads are user-session-bounded
-conversations. Both share the same run evidence model, but expose different
-state to the operator.
+conversations. Both share one evidence model without pretending that a
+conversation and a task have the same success semantics.
 
 Each Mon defaults to one process slot and a shared work root. Opt-in concurrent
 Mons use atomic process slots and isolated run scopes with unique scratch
@@ -265,15 +306,17 @@ Harnesses can search these docs through Monde's `search_docs` tool.
 
 ## Status
 
-Monde is MVP local operator runtime software. The current focus is:
+Monde is an MVP with a working local execution substrate and operator console.
+The current direction is:
 
-- making local agent work visually legible
-- hardening HITL chat and run review flows
-- improving write evidence and artifact review
-- hardening stable-key integration runs and the optional external-receipt substrate
-- making process-attempt retry and scheduled integration evidence operator-legible
-- expanding harness support without weakening scoped permissions
-- keeping setup and recovery clear for local-first use
+- make execution legible from first glance through forensic review
+- strengthen persistent Mon identity across chat, scheduled, and integration work
+- harden generic dispatch, retry, cancellation, isolation, and recovery
+- make write effects and artifact evidence easier to verify
+- keep domain workflow and semantic success outside Monde's generic substrate
+- prepare explicit CI/CD, deployment identity, and authenticated machine inventory
+- expand harness support without weakening scope or evidence guarantees
 
-Future work includes richer onboarding visuals, packaged releases, deeper
-adapter coverage, live import/restore workflows, and deployment guidance.
+The next expansion is not synthetic distributed UI. It is packaged deployment,
+repeatable CI/CD, durable machine identity, and real cross-machine inventory
+for operator-owned VMs—while keeping the current local machine first.

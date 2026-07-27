@@ -1,5 +1,10 @@
 # MCP Run-Scoped Tools
 
+MCP is Monde's run-scoped capability plane, not an ambient tool bus. A tool is
+useful only when Monde can attribute its use to a Mon and run, constrain its
+authority, and preserve enough evidence for an operator to understand what
+happened.
+
 Monde exposes its built-in MCP server over the local loopback service and
 through `monde mcp bridge` for stdio-only harnesses. A Mon may also declare
 provider-neutral external MCP servers for Codex.

@@ -1,14 +1,18 @@
-# Frontend Product Pass
+# Frontend Product Direction
 
-Monde is now past the initial scaffold/proof phase. The current frontend is an
-operator console with a working overview, tabs, run review, plan evidence,
-artifacts, status/doctor views, and a bottom mon chat rail.
+Monde is past the scaffold/proof phase. The frontend is now responsible for
+turning a real execution substrate into an understandable operator product:
+persistent Mons, logical runs, attempts, evidence, review, schedules, and local
+machine context.
 
 Current frontend priority:
 
 ```text
-Make Monde understandable and usable from the web UI without reading CLI logs.
+Make every execution understandable from first glance through forensic review.
 ```
+
+The console should feel like an inhabited local operating environment, not an
+admin CRUD shell and not a collection of disconnected agent chats.
 
 ## Implemented Information Architecture
 
@@ -32,7 +36,7 @@ Persistent bottom rail
   expanded/collapsed chat threads
 ```
 
-The sidebar intentionally does not list mons. Mons are actors inside a selected
+The sidebar intentionally does not list Mons. Mons are actors inside a selected
 Monde and are shown in the Mons tab and chat launcher.
 
 Until authenticated machine inventory and deployment identity exist, every
@@ -45,20 +49,22 @@ through the service while keeping the current local machine first.
 ## Current UX Conventions
 
 - Use Monde names in the sidebar.
-- Use mon ids with `.mon` when referencing mons, for example `frontend.mon`.
+- Use Mon IDs with `.mon` when referencing Mons, for example `frontend.mon`.
+- Establish machine, Monde, Mon, run, and attempt hierarchy before details.
 - Show status/mode as chips, not raw enum dumps, on compact thread surfaces.
 - Keep the Overview visual and backdrop as the first-viewport signal.
+- Prefer human-readable evidence summaries with expandable technical detail.
 - Confirmation prompts use the shared overlay, not ad hoc browser confirms.
 - Destructive actions should be explicit and should not silently remove server
   state.
 
 ## Bottom Chat Product Rules
 
-- Choosing a mon opens a draft thread locally.
+- Choosing a Mon opens a draft thread locally.
 - A draft thread becomes a real `hitl_thread` run only after first send.
 - User messages render optimistically.
-- A mon typing indicator appears while a response is pending.
-- Errors render as mon-side failed responses.
+- A Mon typing indicator appears while a response is pending.
+- Errors render as Mon-side failed responses.
 - Multiple chat widgets can stay expanded.
 - Thread order is stable in the rail; server refreshes update items in place
   rather than reordering by `updated_at`.
@@ -83,6 +89,14 @@ Run Review should make these fields obvious:
 - human-readable typed log messages with expandable payload details
 - scope snapshot
 - review summary and notes
+
+The page should separate three questions that are often conflated:
+
+```text
+What is the runtime doing?      lifecycle and process state
+What did Monde observe?         attempts, output, changes, logs, artifacts
+What judgment was made?         operator or integration outcome
+```
 
 Compact run-kind badges use lowercase `thread` and `one-shot`. Closed clean
 threads show no outcome actions. Closed threads with an unresolved runtime
@@ -135,3 +149,7 @@ needed:
 - import/restore
 - deeper plan review gates
 - release packaging
+
+Remote machine rows also remain deferred until the service exposes
+authenticated inventory and deployment identity. The UI must not simulate a
+distributed product ahead of the runtime contract.

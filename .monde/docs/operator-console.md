@@ -1,8 +1,29 @@
 # Operator Console
 
-The Monde web UI is the local operator console for the selected Monde. It is
-the primary product surface for understanding what agents are doing, why they
-are doing it, and what evidence they produced.
+The Monde web UI is the operating surface for persistent project agents. Its
+job is not merely to display backend records; it should make execution,
+responsibility, evidence, and required human judgment legible.
+
+## Product Role
+
+The console should let an operator answer, in order:
+
+1. Where am I operating, and on which machine?
+2. Which Mon owns this work?
+3. What is running, queued, retrying, waiting, or finished?
+4. What scope and capabilities did the execution receive?
+5. What observable evidence did it produce?
+6. Does a human decision remain?
+
+This creates a deliberate hierarchy:
+
+```text
+machine -> Monde -> Mon -> logical run -> process attempts -> evidence
+```
+
+Chat is one interaction mode inside that hierarchy, not the product's source of
+truth. The run record remains authoritative when a widget closes, a process
+retries, or the service restarts.
 
 ## Shell Layout
 
@@ -12,7 +33,7 @@ Current layout:
 left sidebar       local machine -> Monde hierarchy
 top tabs           Overview, Runs, Mons, Plans, Cron, Artifacts, Status, Review
 main surface       selected tab content
-bottom rail        human-in-the-loop mon chat launcher and thread widgets
+bottom rail        human-in-the-loop Mon chat launcher and thread widgets
 overlay layer      reusable confirmation prompts
 ```
 
@@ -31,13 +52,15 @@ machine.
 
 ## Overview
 
-The Overview tab is the visual home surface. It uses the current Monde backdrop
-asset, sector cards, a status/telemetry strip, and a right-side Monde panel.
+The Overview tab is the operational home surface. Its visual identity matters,
+but every visual element should help establish place, activity, health, or
+attention rather than act as decorative telemetry.
 
 Overview should answer:
 
 - which Monde is selected
-- how many mons/runs/plans/artifacts matter right now
+- which machine is serving it
+- how many Mons, runs, plans, or artifacts matter right now
 - what needs attention
 - where to click next
 
@@ -56,8 +79,8 @@ Runs:
 
 Mons:
 
-- registered mons in the selected Monde
-- mon ids are shown as filesystem-branded names such as `frontend.mon`
+- registered Mons in the selected Monde
+- Mon IDs are shown as filesystem-branded names such as `frontend.mon`
 
 Plans:
 
@@ -98,11 +121,12 @@ Review:
 
 ## Bottom Mon Chat Rail
 
-The bottom rail is a persistent chat launcher and thread surface.
+The bottom rail is a persistent conversation surface for Mons. It keeps
+operator access close without allowing chat chrome to obscure execution state.
 
 Behavior:
 
-- `Add new .mon chat` expands to list mons.
+- `Add new .mon chat` expands to list Mons.
 - The launcher does not collapse when a mon is selected.
 - Selecting a mon creates or focuses a local draft thread.
 - A thread becomes a registered server run only after the first message.
@@ -114,7 +138,7 @@ Behavior:
 
 Thread display:
 
-- mon name
+- Mon name
 - harness chip first
 - runtime status chip second
 - mode chip third
@@ -184,8 +208,9 @@ Run review records:
 - `run.result.notes`
 - audit log entries
 
-The UI should keep outcome review explicit where it applies and should not
-mislabel downstream domain validation as Monde run review.
+The UI should keep outcome review explicit where it applies, distinguish
+process evidence from semantic judgment, and never relabel downstream domain
+validation as Monde run review.
 
 Closed threads are not offered `Mark stopped`: they are already closed and
 have no task-level stop outcome to adjudicate. An unresolved-error thread may
@@ -214,3 +239,16 @@ Write-capable runs surface git evidence when available:
 
 Artifacts are path references, not blobs. Missing paths should remain visible
 instead of disappearing from review surfaces.
+
+## Product Guardrails
+
+- Do not invent machines, actors, success, or evidence from naming conventions.
+- Do not make raw JSON the primary explanation when a human-readable
+  projection is possible.
+- Do not collapse lifecycle, process state, and outcome into one ambiguous
+  status.
+- Do not treat chat completion as task completion.
+- Do not hide failed attempts when a later attempt succeeds.
+- Do not imply that a path reference is durable artifact storage.
+- Keep the current local machine first when authenticated remote inventory
+  arrives.

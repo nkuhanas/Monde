@@ -1,7 +1,7 @@
 # Development And Onboarding
 
-This doc owns the local setup and contributor workflow that used to live in
-the root README.
+This doc owns local setup and contributor workflow for Monde's
+single-operator, loopback-first deployment.
 
 ## Prerequisites
 

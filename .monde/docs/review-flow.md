@@ -1,7 +1,8 @@
 # Review Flow
 
-Run review is the operator path for turning process evidence from ordinary
-operator, plan, and cron runs into an operator-reviewed outcome.
+Run review is Monde's human judgment boundary. It turns observed process
+evidence from ordinary operator, plan, and cron runs into an explicit
+operator-reviewed outcome without rewriting what the runtime actually did.
 
 A process can finish cleanly while the outcome remains `unknown`. Review
 records result data and appends audit evidence.
